@@ -21,7 +21,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pydantic>=2.13.4",
+]
 
 [dependency-groups]
 dev = [
@@ -31,7 +33,7 @@ dev = [
     "isort>=5.10.0",
     "flake8>=5.0.0",
     "mypy>=0.991",
-    "kimina-client",
+    "lean-client",
 ]
 
 [tool.setuptools.packages.find]
@@ -63,4 +65,4 @@ line_length = 88
 known_first_party = ["leanfoundry"]
 
 [tool.uv.sources]
-kimina-client = { path = "../kimina-lean-server/packages/kimina-client", editable = true }
+lean-client = { path = "../kimina-lean-server/packages/lean-client", editable = true }

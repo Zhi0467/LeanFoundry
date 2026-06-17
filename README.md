@@ -3,10 +3,9 @@
 LeanFoundry is a standalone infrastructure project for Lean proof search,
 replay, and evaluation.
 
-This checkout is currently a minimal package shell while the v9 architecture is
-being prototyped. The copied LeanDojo-v2 source has been removed; future
-LeanDojo use should live behind a data-source adapter rather than in core
-runtime code.
+This checkout is currently a scaffold for the v11 architecture. The copied
+LeanDojo-v2 source has been removed; external datasets and runtimes should live
+behind LeanFoundry-owned interfaces rather than in core runtime code.
 
 ## Development
 
@@ -15,10 +14,12 @@ uv sync --group dev
 uv run pytest
 ```
 
-The local development backend client is provided by the neighboring
-`kimina-lean-server` checkout through the `kimina-client` dev dependency.
+The Lean execution backend client comes from a sibling `kimina-lean-server`
+checkout via the `lean-client` dev dependency. Runtime code imports only
+LeanFoundry's `EnvBackend` protocol; the concrete `lean-client` import is
+isolated to the backend adapter.
 
 ## Design Docs
 
-- `docs/leanfoundry_system_design_v9.md`
-- `docs/aristotle_algo.md`
+- `docs/design/leanfoundry_system_design_v11.md`
+- `docs/design/canonical_search.md`
