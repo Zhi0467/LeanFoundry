@@ -222,12 +222,35 @@ Implemented the private runtime-tree foundation without the live engine:
   budget accounting, empirical prior preservation of full tactic text, and
   deterministic selection.
 
-Still deferred: `_expansion.py`, `_extract.py`, concrete `and_or.py`
-`SearchEngine`, final `/exec/verify`, value labels, negation pruning, and HER.
-When expansion lands, make sure it unwraps `ExecStepBatchResult.results` before
-counting tactic attempts, skips already-tried tactic strings for an expanded
-state, and treats tree `PROVED` as structural only until final `verify_one`
-accepts the assembled proof.
+Still deferred after this slice: `_expansion.py`, `_extract.py`, concrete
+`and_or.py` `SearchEngine`, final `/exec/verify`, value labels, negation
+pruning, and HER.
+
+### Applied Second Slice (2026-06-20)
+
+Implemented private expansion helpers without the concrete engine:
+
+- `leanfoundry/proofsearch/_expansion.py`: samples one policy batch for one
+  frontier state, computes empirical action priors from duplicate samples,
+  skips already-tried tactic strings, calls one `EnvBackend.step(...)`, unwraps
+  `ExecStepBatchResult.results` for tactic-call accounting, and attaches
+  `ActionNode`s plus child `StateNode`s.
+- Converts wire `ExecGoalInfo` into `GoalComponent`/`FactorizedProofState`.
+  Metavariable coupling is consumed at expansion time: coupled goal indices
+  become one child state; independent goals become separate child states. With
+  the current `EnvBackend.step(...)` protocol, split children keep the returned
+  state token; focused stepping remains an engine/protocol follow-up if needed.
+- Step statuses map only to runtime tree structure: `complete` proves the
+  action structurally, `open` creates child states, other statuses mark the
+  action dead with the backend message. The engine still must run final
+  `verify_one` before returning `SearchStatus.PROVED`.
+- `tests/test_expansion.py`: policy/backend single-call behavior, duplicate
+  prior counting, already-tried tactic skipping, full tactic text preservation,
+  goal conversion, coupling bundling, error handling, and budget exhaustion.
+
+Still deferred after this slice: `_extract.py`, concrete `and_or.py`
+`SearchEngine`, final `/exec/verify`, value labels, negation pruning, HER, and
+any protocol change needed for focused expansion of split independent goals.
 
 ### Invariants
 
