@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
+from pydantic import Field
+
 from leanfoundry.schemas import FactorizedProofState
 from leanfoundry.schemas._base import LeanFoundryModel
 
@@ -12,10 +14,26 @@ from leanfoundry.schemas._base import LeanFoundryModel
 class PolicySamplingParams(LeanFoundryModel):
     """Sampling controls passed through to policy endpoints."""
 
-    temperature: float = 0.8
-    top_p: float | None = 0.95
-    max_tokens: int | None = None
-    extra: Mapping[str, Any] | None = None
+    temperature: float = Field(
+        default=0.8,
+        ge=0,
+        description="Sampling temperature for tactic or proof generation.",
+    )
+    top_p: float | None = Field(
+        default=0.95,
+        ge=0,
+        le=1,
+        description="Nucleus sampling cutoff; None leaves endpoint default.",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum generated tokens; None leaves endpoint default.",
+    )
+    extra: Mapping[str, Any] | None = Field(
+        default=None,
+        description="Provider-specific sampling options passed through.",
+    )
 
 
 class PolicyClient(Protocol):

@@ -23,6 +23,7 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.13.4",
+    "lean-client",
 ]
 
 [dependency-groups]
@@ -33,7 +34,6 @@ dev = [
     "isort>=5.10.0",
     "flake8>=5.0.0",
     "mypy>=0.991",
-    "lean-client",
 ]
 
 [tool.setuptools.packages.find]

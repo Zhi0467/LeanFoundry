@@ -8,41 +8,68 @@ from leanfoundry.schemas._base import LeanFoundryModel
 
 
 class LocalContextEntry(LeanFoundryModel):
-    """One expression in a goal's local context."""
+    """One hypothesis or local definition in a goal's local context."""
 
-    name: str | None = None
-    type: str
-    value: str | None = None
-
-
-class LocalContext(LeanFoundryModel):
-    """Local context associated with one factorized goal component."""
-
-    entries: list[LocalContextEntry] = Field(default_factory=list)
+    name: str | None = Field(
+        default=None,
+        description="Local variable or hypothesis name as shown by Lean.",
+    )
+    type: str = Field(description="Lean expression type for this entry.")
+    value: str | None = Field(
+        default=None,
+        description="Value for let-bindings; absent for ordinary hypotheses.",
+    )
 
 
 class GoalComponent(LeanFoundryModel):
-    """One factorized goal component."""
+    """One open goal in a proof state.
 
-    component_id: str
-    target: str
-    pretty: str
-    hypotheses: list[LocalContextEntry] = Field(default_factory=list)
-    name: str | None = None
-    sibling_dependencies: list[str] = Field(default_factory=list)
+    Goals are referenced by their position in the owning state's
+    ``goal_components`` list; they carry no separate id.
+    """
+
+    target: str = Field(description="Lean target expression to prove.")
+    pretty: str = Field(description="Prompt-facing rendering of this goal.")
+    hypotheses: list[LocalContextEntry] = Field(
+        default_factory=list,
+        description="Local hypotheses visible to this goal.",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Lean goal name, such as a case label, when available.",
+    )
 
 
 class FactorizedProofState(LeanFoundryModel):
-    """LeanTree-inspired proof-state representation owned by LeanFoundry."""
+    """A tree-search node: the open goals plus the token to resume them.
 
-    env_profile: str
-    theorem_header_options_hash: str
-    goal_components: list[GoalComponent] = Field(default_factory=list)
-    local_context_by_component: dict[str, LocalContext] = Field(
-        default_factory=dict,
+    v0 search is AND/OR tree search, so this stores only what the search and
+    the policy/value models read: the open goals and the backend token. It
+    does not store how the node was assembled. Metavariable coupling between
+    goals is read from the backend response at expansion time to decide goal
+    bundling, then discarded. There is no state-identity fingerprint because
+    states reached by different paths are not merged. See design doc §3.1.
+    """
+
+    env_profile: str = Field(
+        description="Pinned Lean/Mathlib environment for this proof state."
     )
-    metavariable_coupling_groups: list[list[str]] = Field(default_factory=list)
-    tactic_history_hash: str
-    pretty_state: str
-    state_token: str | None = None
-    serialized_lean_state: bytes | None = None
+    goal_components: list[GoalComponent] = Field(
+        default_factory=list,
+        description="Open goals in this state, in Lean's order.",
+    )
+    pretty_state: str = Field(
+        description="Full proof-state rendering for prompts and diagnostics."
+    )
+    state_token: str | None = Field(
+        default=None,
+        description="Opaque backend token used to resume this state.",
+    )
+    serialized_lean_state: bytes | None = Field(
+        default=None,
+        description=(
+            "Optional materialized Lean state blob. Normal search uses "
+            "state_token (the backend keeps the blob); this is the escape "
+            "hatch for multi-node/content-addressed backends per design §2.3."
+        ),
+    )

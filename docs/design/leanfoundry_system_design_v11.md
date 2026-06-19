@@ -1,6 +1,19 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.2 (2026-06-19):** v0 search is AND/OR **tree** search, not graph search.
+> States reached by different paths are **not merged**, because sound merging
+> needs a state-identity fingerprint that captures Lean state the pretty-print
+> omits — a hard, unsolved problem — and merging is only an optimization, not a
+> correctness requirement. Consequence: `FactorizedProofState` is reduced to the
+> minimal tree-search node (open goals + resume token). The merge-identity
+> fields (`theorem_header_options_hash`, `tactic_history_hash`,
+> `metavariable_coupling_groups`, `local_context_by_component`) are removed, and
+> goals are referenced by position rather than a string id. Metavariable
+> coupling is read from the backend response at expansion time to decide goal
+> bundling, then discarded — not stored. The v0.3 graph-merging canonicalization
+> in §3.1 is not pursued unless a validated fingerprint is built. See §3.1.
+
 > **v11.1 (2026-06-17):** Clarifications from an interface walkthrough, folded
 > into the gaps and deployment sections (no architectural change):
 > - **G2** is a *label-representation* gap (the durable schema cannot encode
@@ -991,28 +1004,27 @@ Acceptance gate:
   - solved@budget improves over graph-merge-off tree MCTS
 ```
 
-Infrastructure-owned state schema:
+Infrastructure-owned state schema (v0 tree search; see v11.2 note). A node
+stores its open goals and the token to resume them — not how it was assembled.
+The merge-identity fields and per-component context dict of earlier drafts are
+removed; goals are referenced by position:
 
 ```python
 @dataclass
 class FactorizedProofState:
     env_profile: str
-    theorem_header_options_hash: str
-    goal_components: list[GoalComponent]
-    local_context_by_component: dict[str, LocalContext]
-    metavariable_coupling_groups: list[set[str]]
-    tactic_history_hash: str
+    goal_components: list[GoalComponent]   # open goals, in Lean's order
     pretty_state: str
+    state_token: str | None = None
     serialized_lean_state: bytes | None = None
 ```
 
-Diagnostic-only hash in early versions:
+Diagnostic-only hash (not a merge key — see v11.2; merging is not done):
 
 ```python
 def diagnostic_state_hash(state: FactorizedProofState) -> str:
     return sha256(json.dumps({
         "env_profile": state.env_profile,
-        "theorem_header_options_hash": state.theorem_header_options_hash,
         "pretty_state": state.pretty_state,
     }, sort_keys=True)).hexdigest()
 ```

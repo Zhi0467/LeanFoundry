@@ -14,9 +14,15 @@ from leanfoundry.schemas._base import LeanFoundryModel
 class Checkpoint(LeanFoundryModel):
     """Identifier for a model checkpoint visible to search."""
 
-    checkpoint_id: str
-    uri: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    checkpoint_id: str = Field(description="Stable checkpoint identifier.")
+    uri: str | None = Field(
+        default=None,
+        description="Optional storage URI or serving endpoint.",
+    )
+    metadata: dict[str, str] = Field(
+        default_factory=dict,
+        description="Small string metadata for reproducibility.",
+    )
 
 
 class RLEngineBase(Protocol):

@@ -1,36 +1,35 @@
-"""Adapter for the current lean-client /exec facade.
+"""Adapter binding the EnvBackend protocol to lean_client's exec backend.
 
-This is intentionally the only module in LeanFoundry that imports lean_client.
-Everything else depends on EnvBackend.
+This is the only module in LeanFoundry that constructs the lean_client backend
+façade. Every other module depends on the EnvBackend protocol, not on this
+class. Calls forward straight to AsyncLeanExecBackend with no schema
+round-tripping, because the protocol already speaks lean_client's wire types.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from lean_client import AsyncLeanExecBackend
+from lean_client.exec_models import (
+    ExecCancelResponse,
+    ExecCleanupResponse,
+    ExecCreateStatesResponse,
+    ExecLimitsResponse,
+    ExecStatsResponse,
+    ExecStepBatchResult,
+    ExecVerifyResult,
+)
 
 from leanfoundry.env_backend.base import EnvBackendConfig
-from leanfoundry.schemas import (
-    CreateStateItem,
-    CreateStatesResponse,
-    ExecLimits,
-    StepBatchItem,
-    StepBatchResponse,
-    VerifyItem,
-    VerifyResponse,
-)
 
 
 class KiminaEnvBackend:
-    """EnvBackend adapter backed by lean_client.AsyncLeanExecBackend."""
+    """EnvBackend backed by lean_client.AsyncLeanExecBackend."""
 
     def __init__(self, config: EnvBackendConfig) -> None:
         self.config = config
-        self._backend: Any | None = None
+        self._backend: AsyncLeanExecBackend | None = None
 
     async def connect(self) -> None:
-        from lean_client import AsyncLeanExecBackend
-
         self._backend = await AsyncLeanExecBackend.connect(
             self.config.api_url,
             env_profile=self.config.env_profile,
@@ -47,68 +46,64 @@ class KiminaEnvBackend:
             await self._backend.aclose()
             self._backend = None
 
-    async def limits(self) -> ExecLimits:
-        response = await self._require_backend().limits()
-        return ExecLimits.model_validate(response.model_dump())
+    async def limits(self) -> ExecLimitsResponse:
+        return await self._require_backend().limits()
 
     async def create_states(
         self,
+        item_id: str,
+        code: str,
         *,
-        env_profile: str,
-        items: Sequence[CreateStateItem],
-    ) -> CreateStatesResponse:
-        from lean_client import ExecCreateStateItem
-
-        lean_items = []
-        for item in items:
-            dumped = item.model_dump()
-            lean_items.append(ExecCreateStateItem.model_validate(dumped))
-        response = await self._require_backend().create_states_batch(
-            lean_items,
+        env_profile: str | None = None,
+    ) -> ExecCreateStatesResponse:
+        return await self._require_backend().create_states(
+            item_id,
+            code,
             env_profile=env_profile,
         )
-        return CreateStatesResponse.model_validate(response.model_dump())
 
-    async def step_batch(
+    async def step(
         self,
-        items: Sequence[StepBatchItem],
-    ) -> StepBatchResponse:
-        from lean_client import ExecStepBatchItem
-
-        lean_items = []
-        for item in items:
-            dumped = item.model_dump()
-            lean_items.append(ExecStepBatchItem.model_validate(dumped))
-        response = await self._require_backend().step_batch(lean_items)
-        return StepBatchResponse.model_validate(response.model_dump())
-
-    async def verify(
-        self,
+        node_id: str,
+        state_token: str,
+        tactics: list[str],
         *,
-        env_profile: str,
-        items: Sequence[VerifyItem],
-    ) -> VerifyResponse:
-        from lean_client import ExecVerifyItem
+        timeout_ms: int | None = None,
+    ) -> ExecStepBatchResult:
+        return await self._require_backend().step(
+            node_id,
+            state_token,
+            tactics,
+            timeout_ms=timeout_ms,
+        )
 
-        lean_items = [
-            ExecVerifyItem.model_validate(item.model_dump()) for item in items
-        ]
-        response = await self._require_backend().verify(
-            lean_items,
+    async def verify_one(
+        self,
+        item_id: str,
+        code: str,
+        theorem_name: str,
+        *,
+        allowed_axioms: list[str] | None = None,
+        env_profile: str | None = None,
+    ) -> ExecVerifyResult:
+        return await self._require_backend().verify_one(
+            item_id,
+            code,
+            theorem_name,
+            allowed_axioms=allowed_axioms,
             env_profile=env_profile,
         )
-        return VerifyResponse.model_validate(response.model_dump())
 
-    async def cleanup(self, item_ids: Sequence[str]) -> Any:
-        return await self._require_backend().cleanup(list(item_ids))
+    async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
+        return await self._require_backend().cleanup(item_ids)
 
-    async def cancel(self, item_ids: Sequence[str]) -> Any:
-        return await self._require_backend().cancel(list(item_ids))
+    async def cancel(self, item_ids: list[str]) -> ExecCancelResponse:
+        return await self._require_backend().cancel(item_ids)
 
-    async def stats(self) -> Any:
+    async def stats(self) -> ExecStatsResponse:
         return await self._require_backend().stats()
 
-    def _require_backend(self) -> Any:
+    def _require_backend(self) -> AsyncLeanExecBackend:
         if self._backend is None:
             raise RuntimeError("EnvBackend is not connected")
         return self._backend

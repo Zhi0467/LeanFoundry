@@ -15,9 +15,11 @@ uv run pytest
 ```
 
 The Lean execution backend client comes from a sibling `kimina-lean-server`
-checkout via the `lean-client` dev dependency. Runtime code imports only
-LeanFoundry's `EnvBackend` protocol; the concrete `lean-client` import is
-isolated to the backend adapter.
+checkout via the `lean-client` dependency. LeanFoundry uses lean-client's
+`/exec` wire types directly (no local mirror); only the concrete backend
+*client* is isolated to the `EnvBackend` adapter (`kimina_backend.py`).
+
+Agent/contributor guidance lives in `AGENTS.md`.
 
 ## Design Docs
 

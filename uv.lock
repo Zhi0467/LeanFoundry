@@ -283,6 +283,7 @@ name = "leanfoundry"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "lean-client" },
     { name = "pydantic" },
 ]
 
@@ -291,21 +292,22 @@ dev = [
     { name = "black" },
     { name = "flake8" },
     { name = "isort" },
-    { name = "lean-client" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.13.4" }]
+requires-dist = [
+    { name = "lean-client", editable = "../kimina-lean-server/packages/lean-client" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=22.0.0" },
     { name = "flake8", specifier = ">=5.0.0" },
     { name = "isort", specifier = ">=5.10.0" },
-    { name = "lean-client", editable = "../kimina-lean-server/packages/lean-client" },
     { name = "mypy", specifier = ">=0.991" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-cov", specifier = ">=6.2.1" },

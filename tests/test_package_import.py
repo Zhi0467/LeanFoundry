@@ -40,9 +40,7 @@ def test_tactic_node_preserves_branching_tree_shape() -> None:
 
     state = FactorizedProofState(
         env_profile="lean4.29.1_mathlib_5e932f97",
-        theorem_header_options_hash="header",
         goal_components=[],
-        tactic_history_hash="root",
         pretty_state="|- True /\\ True",
     )
     child = TacticNode(state=state, tactic="trivial", proved=True)
