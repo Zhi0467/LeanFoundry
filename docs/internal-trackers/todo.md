@@ -307,13 +307,28 @@ written to trajectories and HER data.
 
 ### Review Decisions Before Coding Runtime Tree
 
-1. Should `max_tactic_calls` be renamed to `search_budget` to match the design
-   pseudocode, or is the more explicit name clearer?
+1. RESOLVED: keep `max_tactic_calls` (clearer than `search_budget`).
 2. RESOLVED: per-call timeouts ride on lean_client's step item (its
    `TimeoutConfig`); defaults live in `EnvBackendConfig`. No LeanFoundry copy.
-3. Should value-mode handling be split into a dedicated config before any
-   concrete `SearchEngine` implementation?
-4. Should runtime tree checkpoint/resume be v0 or explicitly deferred?
+3. RESOLVED: keep `value_mode` on `SearchConfig`; do not split it into a
+   dedicated config.
+4. RESOLVED: yes, but as increment 2 (after the core loop proves a theorem).
+   Keep the runtime-tree node types serializable from the start (plain data:
+   state, tactic text, stats, token, status) so checkpoint is a clean add, not
+   a retrofit (P10). Checkpoint at the iteration boundary — the per-theorem loop
+   is sequential, so that point is quiescent (no in-flight `step()`), which is
+   why streaming `step()` needs no journal. Checkpoint = tree structure +
+   per-node `state_token` + stats + budget counter (incremented at backprop, not
+   submit, so a re-derived expansion never double-counts).
+   - Two layers: the runtime tree (search process) vs the backend state blobs
+     (the token is just a handle). v0 resume target = search-process death;
+     tokens are still live on the backend within `state_ttl`, so reload + go.
+   - Backend death kills all tokens (signalled by `invalid_state_token`):
+     re-derive a dead state by replaying its tactic path from the root, or
+     restart the theorem. Blob persistence (`serialized_lean_state` / durable
+     token store) for backend-death survival is a later multi-node concern.
+   - Do NOT use `step_batch_resumable`/the journal on the search hot path; a lost
+     expansion is just re-selected next iteration (idempotent at search level).
 5. Should any hard tree-growth cap be added only after first traces, or do we
    want a conservative safety cap despite it not being in the design?
 6. RESOLVED: focus on tree search; MCGS/graph deferred. Add an `AND_OR_TREE`
