@@ -7,7 +7,6 @@ from leanfoundry.proofsearch._budgets import (
     count_tactic_attempts,
     has_tactic_budget,
     remaining_tactic_calls,
-    truncate_tactics_to_budget,
 )
 from leanfoundry.proofsearch._selection import (
     empirical_action_priors,
@@ -22,6 +21,7 @@ from leanfoundry.proofsearch._tree import (
 )
 from leanfoundry.proofsearch.base import SearchConfig
 from leanfoundry.schemas import FactorizedProofState, GoalComponent
+from lean_client.exec_models import ExecStepResult
 
 
 def make_state(
@@ -128,13 +128,12 @@ def test_budget_accounting_counts_backend_results() -> None:
 
     assert has_tactic_budget(config, 0)
     assert remaining_tactic_calls(config, 3) == 2
-    assert truncate_tactics_to_budget(
-        ["a", "b", "c", "d"],
-        config=config,
-        tactic_calls_used=2,
-    ) == ["a", "b", "c"]
 
-    backend_results = [object(), object()]
+    backend_results = [
+        ExecStepResult(tactic="simp", status="complete"),
+        ExecStepResult(tactic="bad", status="error"),
+        ExecStepResult(tactic="retry", status="overloaded"),
+    ]
 
     assert count_tactic_attempts(backend_results) == 2
     assert charge_tactic_calls(

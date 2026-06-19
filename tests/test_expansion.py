@@ -14,6 +14,7 @@ from lean_client.exec_models import (
 from leanfoundry.proofsearch._expansion import (
     expand_state,
     goal_info_to_component,
+    proof_state_from_goals,
     proof_states_from_goals,
 )
 from leanfoundry.proofsearch._tree import (
@@ -90,7 +91,7 @@ def test_goal_info_to_component_preserves_structured_goal_data() -> None:
     assert component.hypotheses[1].value == "proof"
 
 
-def test_proof_states_from_goals_bundles_coupled_goals() -> None:
+def test_proof_state_from_goals_preserves_whole_backend_state() -> None:
     parent_state = make_state()
     goals = [
         ExecGoalInfo(target="A", pretty="|- A", sibling_dep=[2]),
@@ -98,26 +99,28 @@ def test_proof_states_from_goals_bundles_coupled_goals() -> None:
         ExecGoalInfo(target="C", pretty="|- C", sibling_dep=[0]),
     ]
 
-    children = proof_states_from_goals(
+    child = proof_state_from_goals(
         parent_state,
         state_token="child-token",
         goals=goals,
     )
 
-    assert [len(child.goal_components) for child in children] == [2, 1]
-    assert [goal.target for goal in children[0].goal_components] == ["A", "C"]
-    assert [goal.target for goal in children[1].goal_components] == ["B"]
-    assert children[0].state_token == "child-token"
-    assert children[1].state_token == "child-token"
+    assert [goal.target for goal in child.goal_components] == ["A", "B", "C"]
+    assert child.state_token == "child-token"
 
 
-def test_proof_states_reject_invalid_coupling_index() -> None:
-    with pytest.raises(ValueError, match="sibling_dep"):
-        proof_states_from_goals(
-            make_state(),
-            state_token="child-token",
-            goals=[ExecGoalInfo(target="A", sibling_dep=[1])],
-        )
+def test_proof_states_from_goals_returns_one_resumable_child() -> None:
+    children = proof_states_from_goals(
+        make_state(),
+        state_token="child-token",
+        goals=[
+            ExecGoalInfo(target="A", pretty="|- A"),
+            ExecGoalInfo(target="B", pretty="|- B"),
+        ],
+    )
+
+    assert len(children) == 1
+    assert [goal.target for goal in children[0].goal_components] == ["A", "B"]
 
 
 def test_expand_state_calls_policy_and_backend_once() -> None:
@@ -133,7 +136,7 @@ def test_expand_state_calls_policy_and_backend_once() -> None:
         node_id=tree.root.node_id,
         results=[
             ExecStepResult(
-                tactic="-- try constructor\nconstructor",
+                tactic="normalized constructor",
                 status="open",
                 state_token="child-token",
                 goals=[ExecGoalInfo(target="A", pretty="|- A")],
@@ -167,6 +170,75 @@ def test_expand_state_calls_policy_and_backend_once() -> None:
     assert outcome.actions[0].prior == pytest.approx(2 / 3)
     assert outcome.actions[0].children[0].state.state_token == "child-token"
     assert outcome.actions[1].status is ActionNodeStatus.PROVED
+    assert tree.root.status is StateNodeStatus.PROVED
+
+
+def test_expand_state_surfaces_operational_status_without_budget() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["simp"])
+    env_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(
+                    tactic="simp",
+                    status="invalid_state_token",
+                    messages=[
+                        ExecMessage(
+                            severity="error",
+                            data="state token expired",
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=env_backend,
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=1),
+        )
+    )
+
+    assert outcome.actions == []
+    assert outcome.tactic_calls_used == 0
+    assert outcome.operational_status == "invalid_state_token"
+    assert tree.tactic_calls_made == 0
+    assert tree.root.failure_message == "error: state token expired"
+
+
+def test_expand_state_treats_open_empty_goals_as_structurally_proved() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["trivial"])
+    env_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(
+                    tactic="trivial",
+                    status="open",
+                    state_token="empty-token",
+                    goals=[],
+                )
+            ],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=env_backend,
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=1),
+        )
+    )
+
+    assert outcome.actions[0].status is ActionNodeStatus.PROVED
     assert tree.root.status is StateNodeStatus.PROVED
 
 

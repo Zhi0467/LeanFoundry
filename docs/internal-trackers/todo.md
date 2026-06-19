@@ -236,17 +236,23 @@ Implemented private expansion helpers without the concrete engine:
   `ExecStepBatchResult.results` for tactic-call accounting, and attaches
   `ActionNode`s plus child `StateNode`s.
 - Converts wire `ExecGoalInfo` into `GoalComponent`/`FactorizedProofState`.
-  Metavariable coupling is consumed at expansion time: coupled goal indices
-  become one child state; independent goals become separate child states. With
-  the current `EnvBackend.step(...)` protocol, split children keep the returned
-  state token; focused stepping remains an engine/protocol follow-up if needed.
-- Step statuses map only to runtime tree structure: `complete` proves the
-  action structurally, `open` creates child states, other statuses mark the
-  action dead with the backend message. The engine still must run final
-  `verify_one` before returning `SearchStatus.PROVED`.
+  Follow-up review resolved that v0 must NOT split a returned multi-goal state:
+  the backend returns one whole-state token and `EnvBackend.step(...)` does not
+  expose focused goal stepping, so split child nodes would not resume soundly.
+  For now one `open` step result becomes one child state containing all returned
+  goals. Revisit metavariable-coupled bundling only with a focused-step protocol.
+- Step statuses map to runtime tree or operational signals: `complete` proves
+  the action structurally; `open` with goals creates one whole-state child;
+  `open` with no goals is treated as structurally proved; `error` marks the
+  action dead and counts as a Lean tactic attempt; `invalid_state_token`,
+  `overloaded`, and `cancelled` surface on `ExpansionOutcome`/the state
+  failure message and do not count against `max_tactic_calls`.
+  The engine still must run final `verify_one` before returning
+  `SearchStatus.PROVED`.
 - `tests/test_expansion.py`: policy/backend single-call behavior, duplicate
   prior counting, already-tried tactic skipping, full tactic text preservation,
-  goal conversion, coupling bundling, error handling, and budget exhaustion.
+  goal conversion, v0 whole-state child construction, error handling,
+  operational-status handling, and budget exhaustion.
 
 Still deferred after this slice: `_extract.py`, concrete `and_or.py`
 `SearchEngine`, final `/exec/verify`, value labels, negation pruning, HER, and

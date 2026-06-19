@@ -12,6 +12,7 @@ from leanfoundry.proofsearch._budgets import (
     charge_tactic_calls,
     count_tactic_attempts,
     has_tactic_budget,
+    step_result_ran_lean,
 )
 from leanfoundry.proofsearch._selection import empirical_action_priors
 from leanfoundry.proofsearch._tree import ActionNode, SearchTree, StateNode
@@ -29,6 +30,7 @@ class ExpansionOutcome:
 
     actions: list[ActionNode]
     tactic_calls_used: int
+    operational_status: str | None = None
 
 
 async def expand_state(
@@ -59,6 +61,8 @@ async def expand_state(
     tactic_samples = _single_policy_batch(sampled_batches)
     priors = empirical_action_priors(tactic_samples)
     existing_tactics = {action.tactic for action in state_node.actions}
+    # Keep priors on the original sample denominator, even after removing
+    # already-tried tactics; this preserves the policy's empirical confidence.
     new_priors = [
         (tactic, prior)
         for tactic, prior in priors
@@ -73,6 +77,8 @@ async def expand_state(
         state_node.state.state_token,
         tactics,
     )
+    if len(step_batch_result.results) > len(new_priors):
+        raise ValueError("backend returned more step results than tactics")
     completed_attempts = count_tactic_attempts(step_batch_result.results)
     tree.tactic_calls_made = charge_tactic_calls(
         config=config,
@@ -80,19 +86,44 @@ async def expand_state(
         completed_attempts=completed_attempts,
     )
 
-    prior_by_tactic = dict(new_priors)
-    actions = [
-        _attach_step_result(
-            tree,
-            state_node,
-            step_result,
-            prior=prior_by_tactic[step_result.tactic],
+    actions: list[ActionNode] = []
+    operational_status: str | None = None
+    for index, step_result in enumerate(step_batch_result.results):
+        tactic, prior = new_priors[index]
+        if not step_result_ran_lean(step_result):
+            operational_status = step_result.status
+            state_node.failure_message = _step_failure_message(step_result)
+            continue
+        actions.append(
+            _attach_step_result(
+                tree,
+                state_node,
+                step_result,
+                tactic=tactic,
+                prior=prior,
+            )
         )
-        for step_result in step_batch_result.results
-    ]
     return ExpansionOutcome(
         actions=actions,
         tactic_calls_used=completed_attempts,
+        operational_status=operational_status,
+    )
+
+
+def proof_state_from_goals(
+    parent_state: FactorizedProofState,
+    *,
+    state_token: str,
+    goals: list[ExecGoalInfo],
+) -> FactorizedProofState:
+    """Convert one backend post-step state into one child proof state."""
+
+    components = [goal_info_to_component(goal) for goal in goals]
+    return FactorizedProofState(
+        env_profile=parent_state.env_profile,
+        goal_components=components,
+        pretty_state=_render_pretty_state(components),
+        state_token=state_token,
     )
 
 
@@ -102,20 +133,23 @@ def proof_states_from_goals(
     state_token: str,
     goals: list[ExecGoalInfo],
 ) -> list[FactorizedProofState]:
-    """Convert wire goals into bundled child proof states."""
+    """Return the v0 whole-state child for a backend post-step state.
 
-    child_states: list[FactorizedProofState] = []
-    for group in _goal_coupling_groups(goals):
-        components = [goal_info_to_component(goals[index]) for index in group]
-        child_states.append(
-            FactorizedProofState(
-                env_profile=parent_state.env_profile,
-                goal_components=components,
-                pretty_state=_render_pretty_state(components),
-                state_token=state_token,
-            )
+    The backend currently returns one token for the whole state, and
+    ``EnvBackend.step`` does not expose focused goal stepping. Splitting
+    independent goals into separate child nodes is deferred until the protocol
+    can resume those bundles soundly.
+    """
+
+    if not goals:
+        return []
+    return [
+        proof_state_from_goals(
+            parent_state,
+            state_token=state_token,
+            goals=goals,
         )
-    return child_states
+    ]
 
 
 def goal_info_to_component(goal: ExecGoalInfo) -> GoalComponent:
@@ -141,17 +175,25 @@ def _attach_step_result(
     state_node: StateNode,
     step_result: ExecStepResult,
     *,
+    tactic: str,
     prior: float,
 ) -> ActionNode:
-    action = tree.add_action(state_node, step_result.tactic, prior=prior)
+    action = tree.add_action(state_node, tactic, prior=prior)
     if step_result.status == "complete":
         tree.mark_action_proved(action)
         return action
-    if step_result.status != "open":
+    if step_result.status == "error":
         tree.mark_action_dead(
             action,
             message=_step_failure_message(step_result),
         )
+        return action
+    if step_result.status != "open":
+        raise ValueError(
+            f"unexpected executed step status: {step_result.status}"
+        )
+    if not step_result.goals:
+        tree.mark_action_proved(action)
         return action
     if step_result.state_token is None:
         tree.mark_action_dead(
@@ -175,33 +217,6 @@ def _single_policy_batch(sampled_batches: list[list[str]]) -> list[str]:
     return sampled_batches[0]
 
 
-def _goal_coupling_groups(goals: list[ExecGoalInfo]) -> list[list[int]]:
-    parents = list(range(len(goals)))
-
-    def find(index: int) -> int:
-        while parents[index] != index:
-            parents[index] = parents[parents[index]]
-            index = parents[index]
-        return index
-
-    def union(left: int, right: int) -> None:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root != right_root:
-            parents[right_root] = left_root
-
-    for index, goal in enumerate(goals):
-        for sibling_index in goal.sibling_dep:
-            if sibling_index < 0 or sibling_index >= len(goals):
-                raise ValueError("goal sibling_dep index out of range")
-            union(index, sibling_index)
-
-    groups_by_root: dict[int, list[int]] = {}
-    for index in range(len(goals)):
-        groups_by_root.setdefault(find(index), []).append(index)
-    return sorted(groups_by_root.values(), key=lambda group: group[0])
-
-
 def _render_pretty_state(components: list[GoalComponent]) -> str:
     return "\n\n".join(component.pretty for component in components)
 
@@ -219,5 +234,6 @@ __all__ = [
     "ExpansionOutcome",
     "expand_state",
     "goal_info_to_component",
+    "proof_state_from_goals",
     "proof_states_from_goals",
 ]

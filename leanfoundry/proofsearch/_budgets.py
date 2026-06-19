@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence, Sized
+from collections.abc import Iterable
+
+from lean_client.exec_models import ExecStepResult
 
 from leanfoundry.proofsearch.base import SearchConfig
+
+EXECUTED_STEP_STATUSES = frozenset({"open", "complete", "error"})
 
 
 def remaining_tactic_calls(
@@ -27,27 +31,21 @@ def has_tactic_budget(
     return remaining_tactic_calls(config, tactic_calls_used) > 0
 
 
-def count_tactic_attempts(executed_results: Sized) -> int:
+def count_tactic_attempts(step_results: Iterable[ExecStepResult]) -> int:
     """Count executed tactic attempts.
 
     The budget unit is one tactic string that Lean actually ran. Callers pass
-    every backend ``StepResult`` here, including errored attempts and any later
-    synthetic actions.
+    backend ``StepResult`` objects here; errored tactics count because Lean ran
+    them, while overload/cancel/token failures do not.
     """
 
-    return len(executed_results)
+    return sum(1 for result in step_results if step_result_ran_lean(result))
 
 
-def truncate_tactics_to_budget(
-    tactics: Sequence[str],
-    *,
-    config: SearchConfig,
-    tactic_calls_used: int,
-) -> list[str]:
-    """Return only the prefix that fits in the remaining tactic budget."""
+def step_result_ran_lean(step_result: ExecStepResult) -> bool:
+    """Return whether a backend step result consumed a Lean tactic attempt."""
 
-    remaining = remaining_tactic_calls(config, tactic_calls_used)
-    return list(tactics[:remaining])
+    return step_result.status in EXECUTED_STEP_STATUSES
 
 
 def charge_tactic_calls(
@@ -73,5 +71,5 @@ __all__ = [
     "count_tactic_attempts",
     "has_tactic_budget",
     "remaining_tactic_calls",
-    "truncate_tactics_to_budget",
+    "step_result_ran_lean",
 ]
