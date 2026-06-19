@@ -45,7 +45,9 @@ consumer that plugs in via stable interfaces.
 - Descriptive variable names. Separate utilities from entry points; keep public
   and private functions in different files.
 - Deps via `uv` + `pyproject.toml`. Tests: `uv run --no-dev --with pytest
-  pytest`. Lint: `flake8` (79 cols). **Ask before any `git push`.**
+  pytest`. Lint: `flake8` (79 cols).
+- Git: **commit directly to `main`** — do not create a feature branch unless
+  asked. Still **ask before any `git push`**.
 
 ## Where things are
 
