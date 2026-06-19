@@ -267,6 +267,33 @@ def test_expand_state_skips_already_tried_tactics() -> None:
     assert [action.tactic for action in tree.root.actions] == ["simp", "omega"]
 
 
+def test_expand_state_rejects_short_backend_result_list() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["simp", "omega"])
+    env_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[ExecStepResult(tactic="simp", status="complete")],
+        )
+    )
+
+    with pytest.raises(ValueError, match="result count"):
+        asyncio.run(
+            expand_state(
+                tree,
+                tree.root,
+                policy_client=policy,
+                env_backend=env_backend,
+                config=SearchConfig(
+                    max_tactic_calls=5,
+                    tactics_per_expansion=2,
+                ),
+            )
+        )
+
+    assert tree.tactic_calls_made == 0
+
+
 def test_expand_state_marks_error_result_dead_with_message() -> None:
     tree = SearchTree.create("search", make_state())
     policy = FakePolicyClient(["bad"])

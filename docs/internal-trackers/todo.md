@@ -257,6 +257,11 @@ Implemented private expansion helpers without the concrete engine:
 Still deferred after this slice: `_extract.py`, concrete `and_or.py`
 `SearchEngine`, final `/exec/verify`, value labels, negation pruning, HER, and
 any protocol change needed for focused expansion of split independent goals.
+The engine loop must not ignore `ExpansionOutcome.operational_status`: because
+`invalid_state_token`, `overloaded`, and `cancelled` do not consume tactic
+budget, blindly re-selecting the same state can livelock. Handle these by
+re-deriving the token, retrying with backoff, cancelling, or aborting the
+theorem according to the resume model.
 
 ### Invariants
 

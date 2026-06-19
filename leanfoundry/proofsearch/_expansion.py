@@ -77,8 +77,8 @@ async def expand_state(
         state_node.state.state_token,
         tactics,
     )
-    if len(step_batch_result.results) > len(new_priors):
-        raise ValueError("backend returned more step results than tactics")
+    if len(step_batch_result.results) != len(new_priors):
+        raise ValueError("backend step result count did not match tactics")
     completed_attempts = count_tactic_attempts(step_batch_result.results)
     tree.tactic_calls_made = charge_tactic_calls(
         config=config,
