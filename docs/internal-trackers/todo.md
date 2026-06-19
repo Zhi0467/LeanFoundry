@@ -201,6 +201,34 @@ branches, open branches, visit counts, priors, values, dead/disproved states,
 and operational state-token metadata. `ProofTree` is only the solved projection
 written to trajectories and HER data.
 
+### Applied First Slice (2026-06-19)
+
+Implemented the private runtime-tree foundation without the live engine:
+
+- `leanfoundry/proofsearch/_tree.py`: mutable OR `StateNode` and AND
+  `ActionNode` classes, status propagation, parent/child links, visit/value
+  counters, tactic-call counter, and node ids suitable for backend step calls.
+  Follow-up review removed unwired per-node tactic counters and aligned state
+  ids to `"<search_id>:<counter>"`, so lean-client's default
+  `item_id_from_node_id` derives `search_id`.
+- `leanfoundry/proofsearch/_budgets.py`: deterministic tactic-call accounting
+  helpers. Budget unit is one backend step result, including errored attempts
+  and any future synthetic actions. Keep budget mutation through these helpers;
+  do not add a second write path on `SearchTree`.
+- `leanfoundry/proofsearch/_selection.py`: empirical action priors from
+  duplicate policy samples, prior-only PUCT/UCB action selection, and
+  value-free hardest-child selection.
+- `tests/test_runtime_tree.py`: AND/OR invariants, open-is-not-false behavior,
+  budget accounting, empirical prior preservation of full tactic text, and
+  deterministic selection.
+
+Still deferred: `_expansion.py`, `_extract.py`, concrete `and_or.py`
+`SearchEngine`, final `/exec/verify`, value labels, negation pruning, and HER.
+When expansion lands, make sure it unwraps `ExecStepBatchResult.results` before
+counting tactic attempts, skips already-tried tactic strings for an expanded
+state, and treats tree `PROVED` as structural only until final `verify_one`
+accepts the assembled proof.
+
 ### Invariants
 
 1. A `StateNode` is an OR node:
