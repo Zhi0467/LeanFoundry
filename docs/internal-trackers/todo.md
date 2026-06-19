@@ -263,6 +263,27 @@ budget, blindly re-selecting the same state can livelock. Handle these by
 re-deriving the token, retrying with backoff, cancelling, or aborting the
 theorem according to the resume model.
 
+### Applied Third Slice (2026-06-20)
+
+Implemented private value-free backpropagation helpers without the concrete
+engine:
+
+- `leanfoundry/proofsearch/_backprop.py`: increments visit counts from an
+  evaluated `ActionNode` through parent actions/states back to the root, and
+  refreshes existing structural statuses through `SearchTree`.
+- `backpropagate_actions(...)` handles one expansion batch by backpropagating
+  each executed action. This matches the current expansion shape where one
+  selected state can execute several tactic candidates in one backend step.
+- Still no value estimates, value-label emission, negation labels, or censored
+  negatives. Those remain gated on a value model, bonded mode, and negation
+  pruning.
+- `tests/test_backprop.py`: direct action backprop, ancestor path accounting,
+  expansion-batch accounting, and invalid visit-count validation.
+
+Still deferred after this slice: `_extract.py`, concrete `and_or.py`
+`SearchEngine`, final `/exec/verify`, value labels, negation pruning, HER,
+focused goal stepping, and checkpoint/resume.
+
 ### Invariants
 
 1. A `StateNode` is an OR node:
@@ -411,6 +432,10 @@ B3. `_expansion.py` was missing the two conversions that ARE the state model:
     metavariable bundling decision — read each returned goal's coupling
     (positions), put coupled goals in ONE child `StateNode`, split independent
     goals into their own. Coupling is consumed here, never stored.
+    Superseded for v0 by the second implementation slice: without a focused
+    `EnvBackend.step(..., goal_id=...)` protocol, split child nodes cannot
+    resume soundly. v0 keeps one whole-state child per open backend result and
+    defers metavariable-aware splitting until focused stepping exists.
 B4. `_backprop.py` value-label emission is bonded-mode only. In unbonded mode
     LeanFoundry writes no `state_value_labels`. Gate on `value_mode == "bonded"`.
 
