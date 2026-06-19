@@ -382,3 +382,39 @@ R7. Determinism: thread a sampling seed and a fixed selection tie-break so the
 R8. PROVED requires a final `verify_one(...)` on assembled `rendered_lean` — a
     "complete" stepped state is not a certificate (design 2.5/2.7). Rendering
     needs `GoalComponent.name` (case labels) for branching syntax.
+
+### Process and Resume Model (2026-06-19)
+
+Process model (v0): ONE search process runs all theorem searches concurrently as
+async tasks, sharing one `EnvBackend` client whose batcher coalesces their
+`step()` calls into `/exec/step_batch` requests. Multi-process fan-out needs a
+cross-process dispatcher (design R1 / Extension A) — deferred. Revisit when the
+single orchestrator's own CPU (selection/backprop/serialization) saturates or one
+event loop can no longer keep the backend/inference busy.
+
+Three resume levels, distinct layers:
+1. Durable spine (Data Buffer, P3): finished proofs/trajectories are written to
+   SQLite as found, so a crash never loses RESULTS. Essential, cheap — this is
+   the actual preemptibility guarantee.
+2. Search-tree checkpoint (fine, per-theorem): partial in-flight tree + per-node
+   `state_token` + stats + budget counter. Only saves RE-COMPUTE of in-flight
+   theorems; an optimization, not a correctness need (re-running an unfinished
+   search is deterministic with a seed). Keep the tree serializable from day one.
+3. Trainer checkpoint (coarse): weights + optimizer + train step. Separate layer,
+   training-repo concern; not infra-search's job.
+
+OPEN: does v0 build level 2, or rely on level 1 + re-running in-flight theorems on
+resume? Recommendation: level 1 first; add level 2 only when per-theorem budgets
+are large enough that losing in-flight compute hurts.
+
+Crash vs pause is an ORCHESTRATION concern; the infra resume path is the same for
+both — re-run unfinished theorems from the spine (optionally skipped by level 2):
+- Crash (unexpected exit): supervisor backoff-retry auto-restarts. Restart is fast
+  (< `state_ttl`), so the backend is up and tokens are still live → cheap resume.
+- Pause that frees resources (backend torn down): all tokens die (= backend
+  death); re-run in-flight on resume. Results already safe in the spine.
+- Keep-alive ping only helps the narrow "pause search but keep backend warm,
+  briefly" case (pins state, bounded by `max_state_store_bytes`). Not worth
+  building in v0; revisit if that scenario is real.
+The search engine exposes primitives only (checkpoint, resume, graceful drain,
+cleanup); the supervisor / training repo owns the retry-vs-hold policy.
