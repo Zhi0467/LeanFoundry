@@ -5,6 +5,12 @@ It covers what LeanFoundry is, the current architecture decisions (v0 is AND/OR
 **tree** search, not graph/MCGS; lean_client owns the `/exec` schema), and the
 maintainer's working preferences.
 
+The active implementation slice is the AND/OR engine loop (`and_or.py`) — its
+full handoff spec is the **"Search Engine Loop"** section of
+`docs/internal-trackers/todo.md` (per-iteration loop, injected clients,
+`value_mode` = label-emission only, async pipelined throughput, AND/OR value
+backup). Read it before touching the engine.
+
 **Keep AGENTS.md and this file current as you learn** — prefer updating them over
 re-deriving context. Keep both concise.
 

@@ -27,6 +27,15 @@ consumer that plugs in via stable interfaces.
   enforces this).
 - Schemas are strict and minimal: `extra="forbid"`, `frozen=True`. Store only
   what is read, not how it was produced.
+- Expansion splits goals by metavariable coupling: independent subgoals become
+  separate AND children resumed via the backend's `goal_group` focus (verified
+  live; `auto_resume` is NOT group focus); coupled goals stay bundled.
+- The AND/OR engine loop (`and_or.py`) is the active slice. Clients
+  (policy/value/env) are INJECTED into `search()` by a composition root, never
+  built by the engine. `value_mode` is a label-emission flag, not a value source.
+  Policy/value are async streaming calls (SGLang continuous-batches — no manual
+  batching); searches run concurrent + pipelined; value backup is AND/OR-aware
+  (conjunction at AND nodes). See the tracker's "Search Engine Loop" section.
 
 ## How to work here (maintainer's standing preferences)
 
@@ -56,5 +65,7 @@ consumer that plugs in via stable interfaces.
 - Plan and decision log: `docs/internal-trackers/todo.md`.
 - Schemas: `leanfoundry/schemas/`. Interfaces: `env_backend/`, `policy/`,
   `proofsearch/`, `rl_engine/`.
-- Next slice: the AND/OR tree-search engine — see the todo's "Next" section and
-  its "Bugs and Recommendations".
+- Next slice: the AND/OR engine loop + concurrent driver + verify + extraction —
+  see the todo's "Search Engine Loop: Design + Handoff Slice" section (the full
+  handoff spec). Earlier context: the "Next" and "Bugs and Recommendations"
+  sections.

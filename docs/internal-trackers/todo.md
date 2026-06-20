@@ -569,3 +569,95 @@ Applied 2026-06-20:
    `goal_group=state_node.focus` and caps tactics by an optional cached
    `max_tactics_per_step_item`. Still deferred: PolicyClient impl + concurrency
    driver.
+
+## Search Engine Loop: Design + Handoff Slice (2026-06-20)
+
+The next slice is `and_or.py` (the concrete AND/OR tree-search `SearchEngine`)
+plus a concurrent driver, value backup, final verification, and `_extract.py`.
+This captures the design settled in discussion; build it pipeline-ready from the
+start.
+
+### Per-iteration loop (one search tree)
+
+Four phases, run per selected node until budget exhausts or the root resolves,
+then verify and extract:
+1. select — `select_frontier_state(root)` (prior PUCT + value-free hardest child).
+2. expand — `expand_state(...)`: `policy_client.sample_tactics` on the PARENT, one
+   `EnvBackend.step(..., goal_group=node.focus)`, attach actions + split children.
+   Status (proved/dead/disproved) propagates automatically inside the tree
+   mutations — the loop does NOT call a separate status-backup site.
+3. evaluate (gated) — `value_client.estimate` on the NEW CHILD states; write each
+   child's `value_estimate`. Skipped when there is no value source (value-free).
+4. backprop — `backpropagate_actions` (visits) and, when values exist, the value
+   backup folded into the SAME backward pass.
+
+### Clients are injected, never constructed by the engine
+
+`search(theorem, *, policy_client, value_client, env_backend, config)` receives
+every client. The engine never constructs or connects one. The COMPOSITION ROOT
+(a top-level runner / the training-repo rollout — the ultimate orchestration
+level, deferred) builds + connects + injects + closes them; this is what keeps
+the engine model/training-agnostic. Where each client is CALLED:
+- policy: in expansion, on the PARENT (before the step).
+- value: the evaluate step, on the CHILDREN (after the step, before backprop).
+- backprop only READS `value_estimate`; it never calls a model.
+
+### value_mode is a label-emission flag, not a client-construction directive
+
+The value SOURCE is ALWAYS the injected `value_client`:
+- value-free: `value_client=None` → skip evaluate → prior-only PUCT
+  (`value_estimate` None → UCB exploit 0).
+- unbonded: external `value_client` supplied by the training repo.
+- bonded: a policy-backed `value_client` the root builds via a LeanFoundry factory
+  `wrap(policy_client) -> value_client` (same checkpoint + value task token).
+`value_mode` (in `SearchConfig`) controls ONLY whether LeanFoundry emits
+`state_value_labels` (bonded → yes: proved=1 / censored-negative low-weight /
+disproved full-weight; unbonded → no). The engine reads `value_mode` for label
+emission and `value_client` for the scalar — orthogonal, both set consistently by
+the root. The engine calls `value_client.estimate` uniformly and never knows a
+bonded source is policy-backed.
+
+### Throughput: async streaming, pipelined (NOT deferred)
+
+Policy and value are async streaming calls to two clients; SGLang (Slime's
+default inference) continuous-batches server-side, so the engine NEVER manually
+batches — it fires concurrent single-item awaits and lets the server pack them.
+Many theorem searches run as concurrent async tasks under an in-flight cap (the
+driver).
+
+Pipelining is built in from the start: each search is a coroutine doing
+`expand -> await value -> backprop`; while one coroutine awaits its value call the
+event loop runs others' expansions, so value computation overlaps expansion across
+searches. No global "collect the whole frontier, then evaluate" barrier. The
+simple form (await value before that node's backprop) already gives the overlap
+via concurrency — do NOT build the harder two-phase "visit-backprop now,
+value-backup when it lands late" variant; it is unnecessary.
+
+### Value backup must be AND/OR-aware (footgun)
+
+When the value backup lands, an AND action's value is a CONJUNCTION of its
+children (product/min — you need ALL subgoals) and an OR state's value is a
+DISJUNCTION (max/noisy-or over actions). This is NOT the AlphaZero running mean,
+which is wrong at AND nodes (it would rate a branching tactic by the average of
+its subgoals instead of the product). The status propagation already in
+`_tree.py` is the {0, 1, unknown} shadow of exactly this combination rule.
+
+### Slice scope
+
+Build now: `and_or.py` loop (select / expand / evaluate-gated / backprop); the
+concurrent driver (asyncio tasks + in-flight cap, limits cached at connect); the
+gated async evaluate site + AND/OR value backup in `_backprop.py`;
+operational-status handling (act on `ExpansionOutcome.operational_status` —
+re-derive the token or abort; cannot rely on budget, since operational failures
+cost 0 → livelock otherwise); final `verify_one` on the assembled proof (tree
+PROVED is structural only); `_extract.py` (solved slice -> `ProofTree`). Test with
+FAKE policy + value clients so the pipeline and value backup are exercised; the
+value-free path (`value_client=None`) must also pass.
+
+This revises R1 ("prior-only first"): the evaluate site + value-backup WIRING are
+now in-slice so the pipeline is real and fake-tested; only the value-MODEL impl
+(and the bonded factory) stay deferred. Value-free remains the gated default.
+
+Deferred (stub/inject later): real SGLang/Slime PolicyClient/ValueClient impls;
+the bonded `wrap(policy) -> value` factory; the runner / composition root; value
+labels beyond the proved case; negation pruning; HER.
