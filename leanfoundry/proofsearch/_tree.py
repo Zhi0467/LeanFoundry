@@ -39,6 +39,10 @@ class StateNode:
     node_id: str
     state: FactorizedProofState
     depth: int
+    # Goal subset (public positions in the parent action's result token) this
+    # node resumes; None for the root and for whole-state children. Consumed on
+    # this node's first expansion to focus its goals via EnvBackend.step.
+    focus: tuple[int, ...] | None = None
     parent_action: ActionNode | None = None
     actions: list[ActionNode] = field(default_factory=list)
     status: StateNodeStatus = StateNodeStatus.OPEN
@@ -141,6 +145,8 @@ class SearchTree:
         self,
         parent_action: ActionNode,
         state: FactorizedProofState,
+        *,
+        focus: tuple[int, ...] | None = None,
     ) -> StateNode:
         """Attach a child OR state produced by an action."""
 
@@ -150,6 +156,7 @@ class SearchTree:
             node_id=f"{self.search_id}:{self._next_state_index}",
             state=state,
             depth=parent_action.parent_state.depth + 1,
+            focus=focus,
             parent_action=parent_action,
         )
         self._next_state_index += 1

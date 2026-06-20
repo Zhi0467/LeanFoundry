@@ -33,6 +33,19 @@ class ExpansionOutcome:
     operational_status: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ChildState:
+    """One child OR state plus how it resumes from the parent token.
+
+    ``focus`` is the goal subset (public positions in the parent action's
+    result token) this child owns, or None when the child is the whole result
+    state and so steps whole-state without a ``goal.continue``.
+    """
+
+    state: FactorizedProofState
+    focus: tuple[int, ...] | None
+
+
 async def expand_state(
     tree: SearchTree,
     state_node: StateNode,
@@ -40,6 +53,7 @@ async def expand_state(
     policy_client: PolicyClient,
     env_backend: EnvBackend,
     config: SearchConfig,
+    max_tactics_per_step_item: int | None = None,
 ) -> ExpansionOutcome:
     """Sample tactics and expand one open OR state."""
 
@@ -54,6 +68,8 @@ async def expand_state(
         config.tactics_per_expansion,
         config.max_tactic_calls - tree.tactic_calls_made,
     )
+    if max_tactics_per_step_item is not None:
+        tactic_limit = min(tactic_limit, max_tactics_per_step_item)
     sampled_batches = await policy_client.sample_tactics(
         [state_node.state],
         n=tactic_limit,
@@ -76,6 +92,7 @@ async def expand_state(
         state_node.node_id,
         state_node.state.state_token,
         tactics,
+        goal_group=state_node.focus,
     )
     if len(step_batch_result.results) != len(new_priors):
         raise ValueError("backend step result count did not match tactics")
@@ -110,15 +127,58 @@ async def expand_state(
     )
 
 
-def proof_state_from_goals(
+def proof_states_from_goals(
     parent_state: FactorizedProofState,
     *,
     state_token: str,
     goals: list[ExecGoalInfo],
-) -> FactorizedProofState:
-    """Convert one backend post-step state into one child proof state."""
+) -> list[ChildState]:
+    """Split a backend post-step state into child OR states by coupling.
 
-    components = [goal_info_to_component(goal) for goal in goals]
+    Goals are grouped by the transitive closure of their metavariable coupling
+    (``sibling_dep``). A single group is the whole state and resumes
+    whole-state (``focus=None``); multiple groups each become a child that
+    resumes its own goal subset via ``goal_group``. Independent subgoals thus
+    become separate AND children that search can prove in parallel branches.
+    """
+
+    if not goals:
+        return []
+    groups = _goal_coupling_groups(goals)
+    if len(groups) == 1:
+        return [
+            ChildState(
+                state=_proof_state_for_group(
+                    parent_state,
+                    state_token=state_token,
+                    goals=goals,
+                    indices=groups[0],
+                ),
+                focus=None,
+            )
+        ]
+    return [
+        ChildState(
+            state=_proof_state_for_group(
+                parent_state,
+                state_token=state_token,
+                goals=goals,
+                indices=group,
+            ),
+            focus=tuple(group),
+        )
+        for group in groups
+    ]
+
+
+def _proof_state_for_group(
+    parent_state: FactorizedProofState,
+    *,
+    state_token: str,
+    goals: list[ExecGoalInfo],
+    indices: list[int],
+) -> FactorizedProofState:
+    components = [goal_info_to_component(goals[index]) for index in indices]
     return FactorizedProofState(
         env_profile=parent_state.env_profile,
         goal_components=components,
@@ -127,29 +187,31 @@ def proof_state_from_goals(
     )
 
 
-def proof_states_from_goals(
-    parent_state: FactorizedProofState,
-    *,
-    state_token: str,
-    goals: list[ExecGoalInfo],
-) -> list[FactorizedProofState]:
-    """Return the v0 whole-state child for a backend post-step state.
+def _goal_coupling_groups(goals: list[ExecGoalInfo]) -> list[list[int]]:
+    parents = list(range(len(goals)))
 
-    The backend currently returns one token for the whole state, and
-    ``EnvBackend.step`` does not expose focused goal stepping. Splitting
-    independent goals into separate child nodes is deferred until the protocol
-    can resume those bundles soundly.
-    """
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
 
-    if not goals:
-        return []
-    return [
-        proof_state_from_goals(
-            parent_state,
-            state_token=state_token,
-            goals=goals,
-        )
-    ]
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for index, goal in enumerate(goals):
+        for sibling_index in goal.sibling_dep:
+            if sibling_index < 0 or sibling_index >= len(goals):
+                raise ValueError("goal sibling_dep index out of range")
+            union(index, sibling_index)
+
+    groups_by_root: dict[int, list[int]] = {}
+    for index in range(len(goals)):
+        groups_by_root.setdefault(find(index), []).append(index)
+    return sorted(groups_by_root.values(), key=lambda group: group[0])
 
 
 def goal_info_to_component(goal: ExecGoalInfo) -> GoalComponent:
@@ -202,12 +264,12 @@ def _attach_step_result(
         )
         return action
 
-    for child_state in proof_states_from_goals(
+    for child in proof_states_from_goals(
         state_node.state,
         state_token=step_result.state_token,
         goals=step_result.goals,
     ):
-        tree.add_child_state(action, child_state)
+        tree.add_child_state(action, child.state, focus=child.focus)
     return action
 
 
@@ -231,9 +293,9 @@ def _step_failure_message(step_result: ExecStepResult) -> str:
 
 
 __all__ = [
+    "ChildState",
     "ExpansionOutcome",
     "expand_state",
     "goal_info_to_component",
-    "proof_state_from_goals",
     "proof_states_from_goals",
 ]

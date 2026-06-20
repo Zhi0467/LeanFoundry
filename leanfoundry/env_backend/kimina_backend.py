@@ -68,6 +68,7 @@ class KiminaEnvBackend:
         state_token: str,
         tactics: list[str],
         *,
+        goal_group: tuple[int, ...] | None = None,
         timeout_ms: int | None = None,
     ) -> ExecStepBatchResult:
         return await self._require_backend().step(
@@ -75,6 +76,7 @@ class KiminaEnvBackend:
             state_token,
             tactics,
             timeout_ms=timeout_ms,
+            goal_group=list(goal_group) if goal_group is not None else None,
         )
 
     async def verify_one(

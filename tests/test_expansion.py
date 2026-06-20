@@ -12,9 +12,9 @@ from lean_client.exec_models import (
 )
 
 from leanfoundry.proofsearch._expansion import (
+    ChildState,
     expand_state,
     goal_info_to_component,
-    proof_state_from_goals,
     proof_states_from_goals,
 )
 from leanfoundry.proofsearch._tree import (
@@ -48,7 +48,9 @@ class FakePolicyClient:
 class FakeEnvBackend:
     def __init__(self, result: ExecStepBatchResult) -> None:
         self.result = result
-        self.step_calls: list[tuple[str, str, list[str]]] = []
+        self.step_calls: list[
+            tuple[str, str, list[str], tuple[int, ...] | None]
+        ] = []
 
     async def step(
         self,
@@ -56,9 +58,12 @@ class FakeEnvBackend:
         state_token: str,
         tactics: list[str],
         *,
+        goal_group: tuple[int, ...] | None = None,
         timeout_ms: int | None = None,
     ) -> ExecStepBatchResult:
-        self.step_calls.append((node_id, state_token, list(tactics)))
+        self.step_calls.append(
+            (node_id, state_token, list(tactics), goal_group)
+        )
         return self.result
 
 
@@ -91,36 +96,42 @@ def test_goal_info_to_component_preserves_structured_goal_data() -> None:
     assert component.hypotheses[1].value == "proof"
 
 
-def test_proof_state_from_goals_preserves_whole_backend_state() -> None:
-    parent_state = make_state()
-    goals = [
-        ExecGoalInfo(target="A", pretty="|- A", sibling_dep=[2]),
-        ExecGoalInfo(target="B", pretty="|- B"),
-        ExecGoalInfo(target="C", pretty="|- C", sibling_dep=[0]),
-    ]
-
-    child = proof_state_from_goals(
-        parent_state,
-        state_token="child-token",
-        goals=goals,
-    )
-
-    assert [goal.target for goal in child.goal_components] == ["A", "B", "C"]
-    assert child.state_token == "child-token"
-
-
-def test_proof_states_from_goals_returns_one_resumable_child() -> None:
+def test_proof_states_split_bundles_coupled_and_splits_independent() -> None:
+    # Goals 0 and 2 are metavariable-coupled; goal 1 is independent. The
+    # coupled pair stays in one child; the independent goal splits off, each
+    # carrying the goal subset (focus) it resumes from the shared token.
     children = proof_states_from_goals(
         make_state(),
         state_token="child-token",
         goals=[
-            ExecGoalInfo(target="A", pretty="|- A"),
+            ExecGoalInfo(target="A", pretty="|- A", sibling_dep=[2]),
             ExecGoalInfo(target="B", pretty="|- B"),
+            ExecGoalInfo(target="C", pretty="|- C", sibling_dep=[0]),
         ],
     )
 
+    assert len(children) == 2
+    coupled, independent = children
+    assert coupled.focus == (0, 2)
+    assert [g.target for g in coupled.state.goal_components] == ["A", "C"]
+    assert coupled.state.state_token == "child-token"
+    assert independent.focus == (1,)
+    assert [g.target for g in independent.state.goal_components] == ["B"]
+
+
+def test_proof_states_single_group_steps_whole_state_without_focus() -> None:
+    # A single coupling group is the whole state, so it needs no narrowing:
+    # focus is None and the child steps whole-state (no goal.continue).
+    children = proof_states_from_goals(
+        make_state(),
+        state_token="child-token",
+        goals=[ExecGoalInfo(target="A", pretty="|- A")],
+    )
+
     assert len(children) == 1
-    assert [goal.target for goal in children[0].goal_components] == ["A", "B"]
+    assert isinstance(children[0], ChildState)
+    assert children[0].focus is None
+    assert [g.target for g in children[0].state.goal_components] == ["A"]
 
 
 def test_expand_state_calls_policy_and_backend_once() -> None:
@@ -162,6 +173,7 @@ def test_expand_state_calls_policy_and_backend_once() -> None:
             "search:0",
             "root-token",
             ["-- try constructor\nconstructor", "simp"],
+            None,
         )
     ]
     assert outcome.tactic_calls_used == 2
@@ -171,6 +183,99 @@ def test_expand_state_calls_policy_and_backend_once() -> None:
     assert outcome.actions[0].children[0].state.state_token == "child-token"
     assert outcome.actions[1].status is ActionNodeStatus.PROVED
     assert tree.root.status is StateNodeStatus.PROVED
+
+
+def test_expand_state_splits_goals_and_focuses_child_step() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["constructor"])
+    # constructor yields a coupled pair (goals 0, 2) and an independent goal 1.
+    backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(
+                    tactic="constructor",
+                    status="open",
+                    state_token="result-token",
+                    goals=[
+                        ExecGoalInfo(
+                            target="A", pretty="|- A", sibling_dep=[2]
+                        ),
+                        ExecGoalInfo(target="B", pretty="|- B"),
+                        ExecGoalInfo(
+                            target="C", pretty="|- C", sibling_dep=[0]
+                        ),
+                    ],
+                )
+            ],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=backend,
+            config=SearchConfig(max_tactic_calls=10, tactics_per_expansion=1),
+        )
+    )
+
+    # The root has no focus, so it stepped whole-state.
+    assert backend.step_calls[0][3] is None
+    action = outcome.actions[0]
+    assert action.status is ActionNodeStatus.OPEN
+    assert [child.focus for child in action.children] == [(0, 2), (1,)]
+    coupled_child, independent_child = action.children
+    coupled_targets = [g.target for g in coupled_child.state.goal_components]
+    assert coupled_targets == ["A", "C"]
+
+    # Expanding the independent split child resumes only its goal subset: the
+    # next step carries goal_group equal to that child's focus.
+    leaf_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=independent_child.node_id,
+            results=[ExecStepResult(tactic="trivial", status="complete")],
+        )
+    )
+    asyncio.run(
+        expand_state(
+            tree,
+            independent_child,
+            policy_client=FakePolicyClient(["trivial"]),
+            env_backend=leaf_backend,
+            config=SearchConfig(max_tactic_calls=10, tactics_per_expansion=1),
+        )
+    )
+
+    assert leaf_backend.step_calls[0][3] == (1,)
+    assert independent_child.status is StateNodeStatus.PROVED
+
+
+def test_expand_state_respects_per_step_item_cap() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["a", "b", "c", "d"])
+    backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[ExecStepResult(tactic="a", status="error")],
+        )
+    )
+
+    asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=backend,
+            config=SearchConfig(max_tactic_calls=10, tactics_per_expansion=4),
+            max_tactics_per_step_item=1,
+        )
+    )
+
+    # tactics_per_expansion=4 and budget=10, but the per-step-item cap is 1.
+    assert policy.calls[0][1] == 1
+    assert backend.step_calls[0][2] == ["a"]
 
 
 def test_expand_state_surfaces_operational_status_without_budget() -> None:

@@ -509,3 +509,63 @@ both — re-run unfinished theorems from the spine (optionally skipped by level 
   building in v0; revisit if that scenario is real.
 The search engine exposes primitives only (checkpoint, resume, graceful drain,
 cleanup); the supervisor / training repo owns the retry-vs-hold policy.
+
+## Goal Focus: Verified Backend Verdict + Revised Plan (2026-06-20)
+
+Investigated live against the kimina/Pantograph backend
+(`(∃ n : Nat, n = n) ∧ True`). Supersedes the `goal_id/auto_resume` focus idea in
+B3 and the second slice's whole-state deferral.
+
+Verdict:
+- `auto_resume=True` = Pantograph `Site.prefer` (keeps ALL other in-scope goals —
+  drags unrelated siblings); `auto_resume=False` = `Site.focus` (suspends ALL
+  siblings incl. coupled). Neither is group focus. The earlier "auto_resume drags
+  only coupled siblings" assumption is FALSE.
+- Group focus works via Pantograph `GoalState.resume(goals)` = raw `goal.continue`
+  with internal `Goal.id`s. Verified: `[0,1]` → exact coupled cluster; `[2]` →
+  independent goal; both solved independently. Goal order is stable across
+  save/load, so public goal indices are a valid handle.
+- PyPantograph bug: `goal_resume_async` sends `goal.name` not `goal.id`
+  (`pantograph/server.py:329`, `pantograph/expr.py:57`). Use raw `goal.continue`.
+
+Revised contract (replaces the inference about focused stepping):
+1. Backend (kimina-lean-server, one commit — now a SERVER feature, not a client
+   pass-through): add `goal_group: list[int]` to `ExecStepBatchItem` (mutually
+   exclusive with `goal_id/auto_resume`); the worker validates indices (non-empty,
+   unique, in-range), maps them to `Goal.id`, calls raw `goal.continue`, then runs
+   tactics with plain `Site()`; thread `goal_group` through `submit_step` /
+   `AsyncLeanExecBackend.step`.
+2. LeanFoundry: `EnvBackend.step(..., goal_group: tuple[int,...] | None = None)`.
+   Standardize on `goal_group` ONLY — never thread `goal_id/auto_resume`
+   (a singleton tuple focuses an independent goal; `auto_resume` is a footgun).
+   `StateNode.focus = tuple[int,...] | None` on the private runtime node
+   (root focus None).
+3. Expansion: group returned goals by transitive closure of `sibling_dep`; one
+   child per group, each storing the shared result token + its focus index tuple.
+   The conservative "independent-only split, clusters whole-state" fallback is NO
+   LONGER needed — full split is sound. `focus` indices and `goal_components` must
+   come from the SAME returned goal list.
+
+Execution order: (1) backend `goal_group` feature, (2) LeanFoundry interface
+reshape, (3) focused expansion round respecting caps (budget +
+`max_tactics_per_step_item`, limits cached at connect) + `goal_group` + AND/OR
+multi-child attach. Deferred (noted, not built): real `PolicyClient` impl — under
+default Slime inference is vendored by Slime's rollout layer, not raw SGLang, so
+the adapter is a Slime concern behind the Protocol; and the concurrency driver
+(semaphore + `max_items_per_step_batch` / `max_in_flight_exec_requests`) that
+composes single rounds.
+
+Applied 2026-06-20:
+1. kimina-lean-server commit `27dac09`: `ExecStepBatchItem.goal_group`, worker
+   `goal.continue` group resume (raw, with `Goal.id`), threaded through
+   `submit_step`/`step`/`step_node`. Verified live: `goal_group=[0,1]` resumes
+   exactly the coupled cluster and excludes the independent goal.
+2. LeanFoundry: `EnvBackend.step(..., goal_group)` + kimina forwarder (tuple ->
+   list); `StateNode.focus: tuple[int, ...] | None` + `add_child_state(focus=)`.
+3. `_expansion.py`: restored union-find split; `proof_states_from_goals` returns
+   `ChildState(state, focus)` per coupling group. Optimization: a single group
+   is the whole state and steps `focus=None` (no `goal.continue`); only an
+   actual split (multiple groups) sets a focus. `expand_state` passes
+   `goal_group=state_node.focus` and caps tactics by an optional cached
+   `max_tactics_per_step_item`. Still deferred: PolicyClient impl + concurrency
+   driver.

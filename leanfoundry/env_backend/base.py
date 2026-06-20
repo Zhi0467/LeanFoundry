@@ -86,6 +86,7 @@ class EnvBackend(Protocol):
         state_token: str,
         tactics: list[str],
         *,
+        goal_group: tuple[int, ...] | None = None,
         timeout_ms: int | None = None,
     ) -> ExecStepBatchResult:
         """Expand one proof state with N tactics.
@@ -94,6 +95,10 @@ class EnvBackend(Protocol):
         calls from independent theorem searches into one /exec/step_batch
         request, so callers submit one state at a time and never assemble
         cross-theorem batches themselves.
+
+        ``goal_group`` resumes an exact subset of the state's goals (by their
+        public positions) as one focused subtree before running the tactics —
+        how a split child node resumes itself from a shared parent token.
         """
 
     async def verify_one(
