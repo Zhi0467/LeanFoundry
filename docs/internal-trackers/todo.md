@@ -269,16 +269,20 @@ Implemented private value-free backpropagation helpers without the concrete
 engine:
 
 - `leanfoundry/proofsearch/_backprop.py`: increments visit counts from an
-  evaluated `ActionNode` through parent actions/states back to the root, and
-  refreshes existing structural statuses through `SearchTree`.
+  evaluated `ActionNode` through parent actions/states back to the root.
+  Follow-up review made backprop visits-only: status propagation stays owned by
+  the `SearchTree` mutation methods (`mark_action_proved`, `mark_action_dead`,
+  `add_child_state`, `mark_state_disproved`).
 - `backpropagate_actions(...)` handles one expansion batch by backpropagating
   each executed action. This matches the current expansion shape where one
   selected state can execute several tactic candidates in one backend step.
+  Deliberate visit semantics: N executed tactics mean N visits to the frontier
+  and each ancestor, preserving `state.visit_count == sum(action.visit_count)`.
 - Still no value estimates, value-label emission, negation labels, or censored
   negatives. Those remain gated on a value model, bonded mode, and negation
   pruning.
 - `tests/test_backprop.py`: direct action backprop, ancestor path accounting,
-  expansion-batch accounting, and invalid visit-count validation.
+  and expansion-batch accounting.
 
 Still deferred after this slice: `_extract.py`, concrete `and_or.py`
 `SearchEngine`, final `/exec/verify`, value labels, negation pruning, HER,

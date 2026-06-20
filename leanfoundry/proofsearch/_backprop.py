@@ -3,73 +3,44 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 
-from leanfoundry.proofsearch._tree import ActionNode, SearchTree, StateNode
-
-
-@dataclass(frozen=True, slots=True)
-class BackpropagationResult:
-    """Counts updated during one backpropagation call."""
-
-    action_visits: int
-    state_visits: int
+from leanfoundry.proofsearch._tree import ActionNode, StateNode
 
 
-def backpropagate_action(
-    tree: SearchTree,
-    action: ActionNode,
-    *,
-    visits: int = 1,
-) -> BackpropagationResult:
-    """Increment visits from one evaluated action back to the root."""
+def backpropagate_action(action: ActionNode) -> None:
+    """Increment visits from one executed action back to the root.
 
-    if visits < 1:
-        raise ValueError("visits must be positive")
+    Status propagation is owned by ``SearchTree`` mutation methods. Backprop
+    only accounts for executed tactic attempts, so each action contributes one
+    visit to itself, its parent state, and each ancestor action/state.
+    """
 
-    tree.refresh_from_action(action)
-    action.visit_count += visits
-    action_visits = visits
-    state_visits = 0
+    action.visit_count += 1
 
     state_node: StateNode | None = action.parent_state
     while state_node is not None:
-        state_node.visit_count += visits
-        state_visits += visits
+        state_node.visit_count += 1
 
         parent_action = state_node.parent_action
         if parent_action is None:
             break
-        parent_action.visit_count += visits
-        action_visits += visits
+        parent_action.visit_count += 1
         state_node = parent_action.parent_state
 
-    return BackpropagationResult(
-        action_visits=action_visits,
-        state_visits=state_visits,
-    )
 
+def backpropagate_actions(actions: Iterable[ActionNode]) -> None:
+    """Backpropagate every executed action from one expansion.
 
-def backpropagate_actions(
-    tree: SearchTree,
-    actions: Iterable[ActionNode],
-) -> BackpropagationResult:
-    """Backpropagate every executed action from one expansion."""
+    If an expansion executes N tactic candidates, the frontier state and its
+    ancestors receive N visits. This keeps each state's visit count equal to
+    the sum of its outgoing action visits.
+    """
 
-    total_action_visits = 0
-    total_state_visits = 0
     for action in actions:
-        result = backpropagate_action(tree, action)
-        total_action_visits += result.action_visits
-        total_state_visits += result.state_visits
-    return BackpropagationResult(
-        action_visits=total_action_visits,
-        state_visits=total_state_visits,
-    )
+        backpropagate_action(action)
 
 
 __all__ = [
-    "BackpropagationResult",
     "backpropagate_action",
     "backpropagate_actions",
 ]
