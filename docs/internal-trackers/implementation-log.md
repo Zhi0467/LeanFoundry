@@ -128,3 +128,41 @@ Validation for this slice:
   artifact envelope before policy/value extraction.
 - Kept extraction/rendering active because renderer correctness remains
   unresolved beyond narrow verified fixtures.
+
+## 2026-06-21: Operational, Extraction, And Lifecycle Slice
+
+- Added `EnvBackendConfig.max_overloaded_retries` and
+  `overload_backoff_seconds`, forwarding them through `KiminaEnvBackend` to
+  lean-client without adding a LeanFoundry search-loop retry path.
+- Made mixed `overloaded` plus executed step results a structured backend
+  protocol `ERROR`: executed tactic attempts are charged, partial action
+  children are discarded, and all-overloaded remains an operational error with
+  zero tactic budget.
+- Added the explicit `TrainingArtifacts` envelope with proof candidates,
+  positive policy examples, value labels, extraction/rendering failures, and
+  diagnostics. `SearchResult` now carries this envelope separately from scalar
+  diagnostics.
+- Added `ExtractionContext` and value-label extraction for verified proved
+  paths, semantic disproved states, and root-runtime-`OPEN` unproved attempts.
+  Proof/policy/proved-value artifacts are gated on final `/exec/verify`.
+- Kept the current proof rendering canonical and narrow while making rendering
+  failures explicit; `sorry` replacement now skips line comments, nested block
+  comments, and strings.
+- Added `SearchAttemptContext` with runner-owned `attempt_id`,
+  `search_item_id`, `verify_item_id`, and cleanup knobs. `run_search_batch(...)`
+  allocates contexts for normal callers and accepts explicit contexts for
+  runners/tests.
+- Split tree lifecycle ids: tree `create_states`, `step`, and cleanup use
+  `search_item_id`; final `/exec/verify` uses `verify_item_id`. Direct search
+  verifier attempts use `f"{verify_item_id}:{k}"` and do not call cleanup.
+- Added checked cleanup with bounded retries for `deferred` backend cleanup
+  responses. Cancelled runner tasks call `cancel([search_item_id])`, then retry
+  cleanup.
+
+Validation for this slice:
+
+- `python3 -m py_compile` passed for touched modules and tests.
+- `git diff --check` passed.
+- `uv run --no-dev --with pytest pytest ...` is blocked in this workspace
+  because the editable dependency
+  `../kimina-lean-server/packages/lean-client` is missing.

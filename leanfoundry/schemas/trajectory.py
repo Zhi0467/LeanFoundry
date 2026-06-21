@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from leanfoundry.schemas._base import LeanFoundryModel
 from leanfoundry.schemas.proof_state import FactorizedProofState
+from leanfoundry.schemas.value import ValueLabel
 
 
 class TacticNode(LeanFoundryModel):
@@ -78,6 +81,68 @@ class TrainingSample(LeanFoundryModel):
     requires_reverification: bool = Field(
         default=True,
         description="Whether the sample must pass /exec/verify before use.",
+    )
+
+
+class PolicyExample(LeanFoundryModel):
+    """Positive tactic-policy example extracted from verified proof data."""
+
+    state: FactorizedProofState = Field(
+        description="Proof state where the tactic was selected."
+    )
+    tactic: str = Field(description="Verified tactic text.")
+    theorem_id: str | None = Field(
+        default=None,
+        description="Source theorem id for this example, if available.",
+    )
+    env_profile: str = Field(
+        description="Pinned Lean/Mathlib environment for this state."
+    )
+    depth: int = Field(
+        ge=0,
+        description="Depth of the state in the extracted proof tree.",
+    )
+    model_version: int | None = Field(
+        default=None,
+        description="Policy model iteration that produced this tactic.",
+    )
+
+
+class ExtractionFailure(LeanFoundryModel):
+    """Non-search failure encountered while building training artifacts."""
+
+    kind: Literal["rendering", "verification", "unsupported"] = Field(
+        description="Failure class for extraction accounting."
+    )
+    message: str = Field(description="Human-readable failure detail.")
+    node_id: str | None = Field(
+        default=None,
+        description="Runtime node id when the failure localizes to one node.",
+    )
+
+
+class TrainingArtifacts(LeanFoundryModel):
+    """Training-data artifacts emitted by one search attempt."""
+
+    proof_candidates: list[ProofTree] = Field(
+        default_factory=list,
+        description="Rendered proof candidates and verifier status.",
+    )
+    policy_examples: list[PolicyExample] = Field(
+        default_factory=list,
+        description="Positive policy examples gated by final verification.",
+    )
+    value_labels: list[ValueLabel] = Field(
+        default_factory=list,
+        description="Bonded value labels extracted from the search tree.",
+    )
+    failures: list[ExtractionFailure] = Field(
+        default_factory=list,
+        description="Rendering, verification, or unsupported extraction gaps.",
+    )
+    diagnostics: dict[str, float | int | str] = Field(
+        default_factory=dict,
+        description="Small scalar extraction counters.",
     )
 
 

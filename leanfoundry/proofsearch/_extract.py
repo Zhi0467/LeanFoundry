@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import re
-
 from leanfoundry.proofsearch._tree import (
     ActionNode,
-    ActionNodeStatus,
     SearchTree,
     StateNode,
 )
 from leanfoundry.proofsearch._tree_init import initial_code_for_theorem
-from leanfoundry.schemas import ProofTree, TacticNode, TheoremSpec
-
-_SORRY_RE = re.compile(r"\bsorry\b")
+from leanfoundry.proofsearch.extraction import extract_tactic_node_from_state
+from leanfoundry.schemas import ProofTree, TheoremSpec
 
 
 class UnsupportedProofExtraction(ValueError):
@@ -35,7 +31,7 @@ def extract_proof_tree(tree: SearchTree, theorem: TheoremSpec) -> ProofTree:
         raise ValueError("cannot extract proof tree from unproved root")
 
     roots = [
-        _tactic_node_from_state(child, depth=0)
+        extract_tactic_node_from_state(child, depth=0)
         for child in synthetic_initialization_action.children
     ]
     proof_scripts = [
@@ -47,27 +43,6 @@ def extract_proof_tree(tree: SearchTree, theorem: TheoremSpec) -> ProofTree:
         roots=roots,
         rendered_lean=rendered_lean,
         verified=False,
-    )
-
-
-def _tactic_node_from_state(
-    state_node: StateNode,
-    *,
-    depth: int,
-) -> TacticNode:
-    action = state_node.proved_action()
-    if action is None:
-        raise ValueError("proved state did not expose a proved action")
-    return TacticNode(
-        state=state_node.state,
-        tactic=action.tactic,
-        children=[
-            _tactic_node_from_state(child, depth=depth + 1)
-            for child in action.children
-        ],
-        proved=action.status is ActionNodeStatus.PROVED,
-        depth=depth,
-        total_tactics_tried=action.visit_count,
     )
 
 
@@ -122,13 +97,13 @@ def _render_lean_with_proofs(
 
 
 def _replace_first_sorry(code: str, proof_script: str) -> tuple[str, bool]:
-    match = _SORRY_RE.search(code)
-    if match is None:
+    position = _find_first_sorry_token(code)
+    if position is None:
         return code, False
 
-    indent = _line_indent_before(code, match.start())
+    indent = _line_indent_before(code, position)
     replacement = _indent_script(proof_script, indent)
-    rendered = f"{code[:match.start()]}{replacement}{code[match.end():]}"
+    rendered = f"{code[:position]}{replacement}{code[position + 5:]}"
     return rendered, True
 
 
@@ -160,6 +135,78 @@ def _line_indent_before(code: str, position: int) -> str:
         else:
             return ""
     return "".join(indent_chars)
+
+
+def _find_first_sorry_token(code: str) -> int | None:
+    index = 0
+    block_comment_depth = 0
+    in_string = False
+    in_line_comment = False
+
+    while index < len(code):
+        character = code[index]
+        next_character = code[index + 1] if index + 1 < len(code) else ""
+
+        if in_line_comment:
+            if character == "\n":
+                in_line_comment = False
+            index += 1
+            continue
+
+        if in_string:
+            if character == "\\":
+                index += 2
+                continue
+            if character == "\"":
+                in_string = False
+            index += 1
+            continue
+
+        if block_comment_depth:
+            if character == "/" and next_character == "-":
+                block_comment_depth += 1
+                index += 2
+                continue
+            if character == "-" and next_character == "/":
+                block_comment_depth -= 1
+                index += 2
+                continue
+            index += 1
+            continue
+
+        if character == "-" and next_character == "-":
+            in_line_comment = True
+            index += 2
+            continue
+        if character == "/" and next_character == "-":
+            block_comment_depth = 1
+            index += 2
+            continue
+        if character == "\"":
+            in_string = True
+            index += 1
+            continue
+
+        if code.startswith("sorry", index) and _is_token_boundary(
+            code,
+            index,
+            index + 5,
+        ):
+            return index
+        index += 1
+    return None
+
+
+def _is_token_boundary(code: str, start: int, end: int) -> bool:
+    before = code[start - 1] if start > 0 else ""
+    after = code[end] if end < len(code) else ""
+    return not _is_identifier_character(
+        before
+    ) and not _is_identifier_character(after)
+
+
+def _is_identifier_character(character: str) -> bool:
+    return character.isalnum() or character in {"_", "'", "."}
 
 
 def _indent_script(proof_script: str, indent: str) -> str:

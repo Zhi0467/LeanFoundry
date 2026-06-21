@@ -7,7 +7,17 @@ from collections.abc import Sequence
 
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.policy import PolicyClient, ValueClient
-from leanfoundry.proofsearch.base import SearchConfig, SearchResult
+from leanfoundry.proofsearch._common import make_attempt_context
+from leanfoundry.proofsearch._lifecycle import (
+    cancel_search_state,
+    cleanup_search_state,
+)
+from leanfoundry.proofsearch.base import (
+    SearchAlgorithm,
+    SearchAttemptContext,
+    SearchConfig,
+    SearchResult,
+)
 from leanfoundry.proofsearch.factory import build_engine
 from leanfoundry.schemas import TheoremSpec
 
@@ -20,9 +30,14 @@ async def run_search_batch(
     env_backend: EnvBackend,
     config: SearchConfig,
     max_concurrent: int | None = None,
+    attempt_contexts: Sequence[SearchAttemptContext] | None = None,
 ) -> list[SearchResult]:
     """Run independent theorem searches concurrently under an in-flight cap."""
 
+    if attempt_contexts is not None and len(attempt_contexts) != len(
+        theorems
+    ):
+        raise ValueError("attempt_contexts must match theorem count")
     if max_concurrent is None:
         limits = await env_backend.limits()
         max_concurrent = max(1, limits.max_in_flight_exec_requests)
@@ -32,17 +47,43 @@ async def run_search_batch(
     engine = build_engine(config)
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def run_one(theorem: TheoremSpec) -> SearchResult:
-        async with semaphore:
-            return await engine.search(
+    async def run_one(index: int, theorem: TheoremSpec) -> SearchResult:
+        if attempt_contexts is None:
+            attempt_context = make_attempt_context(
                 theorem,
-                policy_client=policy_client,
-                value_client=value_client,
-                env_backend=env_backend,
-                config=config,
+                kind=config.algorithm.value,
+                uses_search_state=_uses_search_state(config.algorithm),
             )
+        else:
+            attempt_context = attempt_contexts[index]
+        async with semaphore:
+            try:
+                return await engine.search(
+                    theorem,
+                    attempt_context=attempt_context,
+                    policy_client=policy_client,
+                    value_client=value_client,
+                    env_backend=env_backend,
+                    config=config,
+                )
+            except asyncio.CancelledError:
+                await cancel_search_state(env_backend, attempt_context)
+                await cleanup_search_state(env_backend, attempt_context)
+                raise
 
-    return await asyncio.gather(*(run_one(theorem) for theorem in theorems))
+    return await asyncio.gather(
+        *(
+            run_one(index, theorem)
+            for index, theorem in enumerate(theorems)
+        )
+    )
+
+
+def _uses_search_state(algorithm: SearchAlgorithm) -> bool:
+    return algorithm not in {
+        SearchAlgorithm.DIRECT,
+        SearchAlgorithm.SELF_CORRECT,
+    }
 
 
 __all__ = [

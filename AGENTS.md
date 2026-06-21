@@ -44,7 +44,13 @@ consumer that plugs in via stable interfaces.
   `puct_exploration_weight` / `best_first_missing_value_score`. Deferred:
   graph/MCGS, negation pruning, HER, real model adapters, bonded value
   factory/labels, and richer proof rendering for split children that own
-  multiple focused goals.
+  multiple focused goals. Search attempts now receive runner-owned
+  `SearchAttemptContext` ids: tree state uses `search_item_id`, final verify
+  uses `verify_item_id`, direct verifier attempts use `verify_item_id:k`, and
+  checked cleanup/cancel is runner lifecycle work. Training extraction returns a
+  `TrainingArtifacts` envelope; proof/policy/proved-value artifacts require
+  final `/exec/verify` acceptance, while root-runtime-`OPEN` exhaustion emits no
+  policy data and only effort-gated censored value labels in bonded mode.
 
 ## How to work here (maintainer's standing preferences)
 
@@ -83,5 +89,5 @@ consumer that plugs in via stable interfaces.
 - Completed slice log: `docs/internal-trackers/implementation-log.md`.
 - Schemas: `leanfoundry/schemas/`. Interfaces: `env_backend/`, `policy/`,
   `proofsearch/`, `rl_engine/`.
-- Next slice: real policy/value adapters or the deferred training-data pieces
-  (bonded value-label emission, negation pruning, HER), depending on the tracker.
+- Next slice: richer proof rendering or real policy/value adapters, depending
+  on the tracker.

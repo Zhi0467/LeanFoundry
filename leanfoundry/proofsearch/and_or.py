@@ -11,23 +11,33 @@ from leanfoundry.proofsearch._and_or_utils import (
 from leanfoundry.proofsearch._backprop import backpropagate_actions
 from leanfoundry.proofsearch._budgets import has_tactic_budget
 from leanfoundry.proofsearch._common import (
-    make_search_id,
+    result_with_attempt_context,
     theorem_name_for_verify,
 )
 from leanfoundry.proofsearch._evaluation import evaluate_new_children
-from leanfoundry.proofsearch._expansion import expand_state
+from leanfoundry.proofsearch._expansion import (
+    BackendProtocolError,
+    expand_state,
+)
+from leanfoundry.proofsearch._lifecycle import cleanup_search_state
 from leanfoundry.proofsearch._extract import (
     UnsupportedProofExtraction,
     extract_proof_tree,
 )
 from leanfoundry.proofsearch._selection import SelectionStrategy
-from leanfoundry.proofsearch._tree import StateNodeStatus
+from leanfoundry.proofsearch._tree import SearchTree, StateNodeStatus
 from leanfoundry.proofsearch._tree_init import initialize_search_tree
 from leanfoundry.proofsearch.base import (
+    SearchAttemptContext,
     SearchConfig,
     SearchEngine,
     SearchResult,
     SearchStatus,
+)
+from leanfoundry.proofsearch.extraction import (
+    extract_training_artifacts,
+    extraction_context_for_theorem,
+    rendering_failure_artifacts,
 )
 from leanfoundry.schemas import TheoremSpec
 
@@ -42,6 +52,7 @@ class AndOrSearchEngine(SearchEngine):
         self,
         theorem: TheoremSpec,
         *,
+        attempt_context: SearchAttemptContext,
         policy_client: PolicyClient,
         value_client: ValueClient | None,
         env_backend: EnvBackend,
@@ -51,21 +62,48 @@ class AndOrSearchEngine(SearchEngine):
 
         theorem_name = theorem_name_for_verify(theorem)
         if theorem_name is None:
-            return SearchResult(
-                theorem_id=theorem.id,
-                status=SearchStatus.ERROR,
-                diagnostics={
-                    "error": "theorem_name is required for verification"
-                },
+            return result_with_attempt_context(
+                SearchResult(
+                    theorem_id=theorem.id,
+                    status=SearchStatus.ERROR,
+                    diagnostics={
+                        "error": "theorem_name is required for verification"
+                    },
+                ),
+                attempt_context,
+            )
+        if attempt_context.search_item_id is None:
+            return result_with_attempt_context(
+                SearchResult(
+                    theorem_id=theorem.id,
+                    status=SearchStatus.ERROR,
+                    diagnostics={
+                        "error": "tree search requires search_item_id"
+                    },
+                ),
+                attempt_context,
             )
 
-        search_id = make_search_id(theorem, kind="and_or")
+        search_item_id = attempt_context.search_item_id
+        tree: SearchTree | None = None
+
+        async def finish(result: SearchResult) -> SearchResult:
+            cleanup_report = await cleanup_search_state(
+                env_backend,
+                attempt_context,
+            )
+            return result_with_attempt_context(
+                result,
+                attempt_context,
+                diagnostics=cleanup_report.diagnostics(),
+            )
+
         try:
             limits = await env_backend.limits()
             initialized = await initialize_search_tree(
                 env_backend,
                 theorem,
-                search_id=search_id,
+                search_id=search_item_id,
             )
             tree = initialized.tree
 
@@ -87,11 +125,13 @@ class AndOrSearchEngine(SearchEngine):
                     ),
                 )
                 if outcome.operational_status is not None:
-                    return operational_result(
-                        theorem,
-                        tree.tactic_calls_made,
-                        outcome.operational_status,
-                        frontier.failure_message,
+                    return await finish(
+                        operational_result(
+                            theorem,
+                            tree.tactic_calls_made,
+                            outcome.operational_status,
+                            frontier.failure_message,
+                        )
                     )
                 if not outcome.actions and outcome.tactic_calls_used == 0:
                     frontier.failure_message = "no new tactics to try"
@@ -109,29 +149,72 @@ class AndOrSearchEngine(SearchEngine):
                 try:
                     proof_tree = extract_proof_tree(tree, theorem)
                 except UnsupportedProofExtraction as error:
-                    return SearchResult(
-                        theorem_id=theorem.id,
-                        status=SearchStatus.ERROR,
-                        search_budget_used=tree.tactic_calls_made,
-                        diagnostics={"extraction_error": str(error)},
+                    return await finish(
+                        SearchResult(
+                            theorem_id=theorem.id,
+                            status=SearchStatus.ERROR,
+                            training_artifacts=rendering_failure_artifacts(
+                                str(error)
+                            ),
+                            search_budget_used=tree.tactic_calls_made,
+                            diagnostics={"extraction_error": str(error)},
+                        ),
                     )
-                return await verify_extracted_tree(
-                    theorem,
-                    env_backend,
-                    search_id,
-                    theorem_name,
-                    proof_tree,
-                    tree.tactic_calls_made,
+                return await finish(
+                    await verify_extracted_tree(
+                        theorem,
+                        env_backend,
+                        attempt_context.verify_item_id,
+                        theorem_name,
+                        proof_tree,
+                        tree.tactic_calls_made,
+                        tree,
+                        extraction_context_for_theorem(
+                            theorem,
+                            config=config,
+                            search_budget_used=tree.tactic_calls_made,
+                            attempt_id=attempt_context.attempt_id,
+                            search_item_id=search_item_id,
+                            verify_item_id=attempt_context.verify_item_id,
+                        ),
+                    )
                 )
 
-            return SearchResult(
-                theorem_id=theorem.id,
-                status=SearchStatus.EXHAUSTED,
+            exhausted_context = extraction_context_for_theorem(
+                theorem,
+                config=config,
                 search_budget_used=tree.tactic_calls_made,
-                diagnostics={"root_status": tree.root.status},
+                attempt_id=attempt_context.attempt_id,
+                search_item_id=search_item_id,
+                verify_item_id=attempt_context.verify_item_id,
             )
-        finally:
-            await env_backend.cleanup([search_id])
+            return await finish(
+                SearchResult(
+                    theorem_id=theorem.id,
+                    status=SearchStatus.EXHAUSTED,
+                    training_artifacts=extract_training_artifacts(
+                        tree,
+                        exhausted_context,
+                    ),
+                    search_budget_used=tree.tactic_calls_made,
+                    diagnostics={"root_status": tree.root.status},
+                )
+            )
+        except BackendProtocolError as error:
+            tactic_calls_made = 0
+            if tree is not None:
+                tactic_calls_made = tree.tactic_calls_made
+            return await finish(
+                SearchResult(
+                    theorem_id=theorem.id,
+                    status=SearchStatus.ERROR,
+                    search_budget_used=tactic_calls_made,
+                    diagnostics={
+                        "operational_status": "backend_protocol_error",
+                        "failure_message": str(error),
+                    },
+                )
+            )
 
 
 __all__ = [

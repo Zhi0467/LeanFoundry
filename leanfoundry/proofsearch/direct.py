@@ -5,7 +5,7 @@ from __future__ import annotations
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.policy import PolicyClient, ValueClient
 from leanfoundry.proofsearch._common import (
-    make_search_id,
+    result_with_attempt_context,
     theorem_name_for_verify,
     verifier_feedback,
 )
@@ -17,12 +17,13 @@ from leanfoundry.proofsearch._direct_utils import (
     single_proof_batch,
 )
 from leanfoundry.proofsearch.base import (
+    SearchAttemptContext,
     SearchConfig,
     SearchEngine,
     SearchResult,
     SearchStatus,
 )
-from leanfoundry.schemas import TheoremSpec
+from leanfoundry.schemas import TheoremSpec, TrainingArtifacts
 
 
 class DirectSearchEngine(SearchEngine):
@@ -35,6 +36,7 @@ class DirectSearchEngine(SearchEngine):
         self,
         theorem: TheoremSpec,
         *,
+        attempt_context: SearchAttemptContext,
         policy_client: PolicyClient,
         value_client: ValueClient | None,
         env_backend: EnvBackend,
@@ -44,12 +46,14 @@ class DirectSearchEngine(SearchEngine):
 
         theorem_name = theorem_name_for_verify(theorem)
         if theorem_name is None:
-            return direct_error_result(
-                theorem,
-                "theorem_name is required for final verification",
+            return result_with_attempt_context(
+                direct_error_result(
+                    theorem,
+                    "theorem_name is required for final verification",
+                ),
+                attempt_context,
             )
 
-        search_id = make_search_id(theorem, kind="direct")
         attempts_used = 0
         feedback: str | None = None
         while attempts_used < config.max_direct_candidates:
@@ -72,38 +76,52 @@ class DirectSearchEngine(SearchEngine):
             for candidate in candidates:
                 attempts_used += 1
                 verification = await env_backend.verify_one(
-                    f"{search_id}:{attempts_used}",
+                    attempt_context.direct_verify_item_id(attempts_used),
                     candidate,
                     theorem_name,
                     allowed_axioms=theorem.allowed_axioms,
                     env_profile=theorem.env_profile,
                 )
                 if verification.status == "accepted":
-                    return SearchResult(
-                        theorem_id=theorem.id,
-                        status=SearchStatus.PROVED,
-                        proof_tree=proof_tree_for_direct_candidate(
-                            candidate,
-                            verified=True,
+                    proof_tree = proof_tree_for_direct_candidate(
+                        candidate,
+                        verified=True,
+                    )
+                    return result_with_attempt_context(
+                        SearchResult(
+                            theorem_id=theorem.id,
+                            status=SearchStatus.PROVED,
+                            proof_tree=proof_tree,
+                            training_artifacts=TrainingArtifacts(
+                                proof_candidates=[proof_tree],
+                                diagnostics={"proof_candidates": 1},
+                            ),
+                            search_budget_used=attempts_used,
+                            diagnostics={"verify_attempts": attempts_used},
                         ),
-                        search_budget_used=attempts_used,
-                        diagnostics={"verify_attempts": attempts_used},
+                        attempt_context,
                     )
                 if verification.status == "cancelled":
-                    return direct_terminal_result(
-                        theorem,
-                        SearchStatus.CANCELLED,
-                        attempts_used=attempts_used,
-                        verifier_status=verification.status,
-                        messages=verification.messages,
+                    return result_with_attempt_context(
+                        direct_terminal_result(
+                            theorem,
+                            SearchStatus.CANCELLED,
+                            attempts_used=attempts_used,
+                            verifier_status=verification.status,
+                            messages=verification.messages,
+                        ),
+                        attempt_context,
                     )
                 if verification.status == "overloaded":
-                    return direct_terminal_result(
-                        theorem,
-                        SearchStatus.ERROR,
-                        attempts_used=attempts_used,
-                        verifier_status=verification.status,
-                        messages=verification.messages,
+                    return result_with_attempt_context(
+                        direct_terminal_result(
+                            theorem,
+                            SearchStatus.ERROR,
+                            attempts_used=attempts_used,
+                            verifier_status=verification.status,
+                            messages=verification.messages,
+                        ),
+                        attempt_context,
                     )
                 feedback = verifier_feedback(
                     verification.status,
@@ -112,14 +130,17 @@ class DirectSearchEngine(SearchEngine):
             if not self.self_correct:
                 break
 
-        return SearchResult(
-            theorem_id=theorem.id,
-            status=SearchStatus.EXHAUSTED,
-            search_budget_used=attempts_used,
-            diagnostics={
-                "verify_attempts": attempts_used,
-                "last_feedback": feedback or "",
-            },
+        return result_with_attempt_context(
+            SearchResult(
+                theorem_id=theorem.id,
+                status=SearchStatus.EXHAUSTED,
+                search_budget_used=attempts_used,
+                diagnostics={
+                    "verify_attempts": attempts_used,
+                    "last_feedback": feedback or "",
+                },
+            ),
+            attempt_context,
         )
 
 

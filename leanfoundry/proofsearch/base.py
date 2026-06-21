@@ -9,7 +9,7 @@ from pydantic import Field
 
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.policy import PolicyClient, ValueClient
-from leanfoundry.schemas import ProofTree, TheoremSpec
+from leanfoundry.schemas import ProofTree, TheoremSpec, TrainingArtifacts
 from leanfoundry.schemas._base import LeanFoundryModel
 
 
@@ -114,9 +114,53 @@ class SearchConfig(LeanFoundryModel):
     )
 
 
+class SearchAttemptContext(LeanFoundryModel):
+    """Runner-owned backend identity for one theorem attempt."""
+
+    attempt_id: str = Field(
+        description="Stable attempt id joining logs, backend ids, and records."
+    )
+    search_item_id: str | None = Field(
+        default=None,
+        description="Backend item id for tree-search state, if any.",
+    )
+    verify_item_id: str = Field(
+        description="Backend item id prefix for final verification.",
+    )
+    cleanup_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description="Bounded cleanup attempts for deferred backend state.",
+    )
+    cleanup_backoff_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description="Backoff between deferred cleanup attempts.",
+    )
+
+    def direct_verify_item_id(self, candidate_index: int) -> str:
+        """Return the verifier item id for one direct-search candidate."""
+
+        if candidate_index < 1:
+            raise ValueError("candidate_index is one-based")
+        return f"{self.verify_item_id}:{candidate_index}"
+
+
 class SearchResult(LeanFoundryModel):
     """Persistable summary of one theorem search attempt."""
 
+    attempt_id: str | None = Field(
+        default=None,
+        description="Search attempt id, when allocated by the runner.",
+    )
+    search_item_id: str | None = Field(
+        default=None,
+        description="Backend search-state item id, when one exists.",
+    )
+    verify_item_id: str | None = Field(
+        default=None,
+        description="Backend verifier item id or prefix.",
+    )
     theorem_id: str | None = Field(
         default=None,
         description="The theorem id when the input theorem came from storage.",
@@ -127,6 +171,13 @@ class SearchResult(LeanFoundryModel):
     proof_tree: ProofTree | None = Field(
         default=None,
         description="Solved proof projection, present only when proof exists.",
+    )
+    training_artifacts: TrainingArtifacts | None = Field(
+        default=None,
+        description=(
+            "Policy/value/proof artifacts extracted from the attempt. "
+            "Operational failures may leave this empty."
+        ),
     )
     search_budget_used: int = Field(
         default=0,
@@ -150,6 +201,7 @@ class SearchEngine(Protocol):
         self,
         theorem: TheoremSpec,
         *,
+        attempt_context: SearchAttemptContext,
         policy_client: PolicyClient,
         value_client: ValueClient | None,
         env_backend: EnvBackend,

@@ -26,6 +26,10 @@ from leanfoundry.schemas import (
 _FATAL_OPERATIONAL_STATUSES = frozenset({"invalid_state_token", "cancelled"})
 
 
+class BackendProtocolError(ValueError):
+    """Raised when backend results violate LeanFoundry's step contract."""
+
+
 @dataclass(frozen=True, slots=True)
 class ExpansionOutcome:
     """Result of expanding one frontier state."""
@@ -118,7 +122,7 @@ async def expand_state(
         step_batch_result.results
     )
     if first_overloaded_result is not None and completed_attempts > 0:
-        raise ValueError(
+        raise BackendProtocolError(
             "backend returned overloaded mixed with executed step results"
         )
 
@@ -333,6 +337,7 @@ def _step_failure_message(step_result: ExecStepResult) -> str:
 
 
 __all__ = [
+    "BackendProtocolError",
     "ChildState",
     "ExpansionOutcome",
     "expand_state",

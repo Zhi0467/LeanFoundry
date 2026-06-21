@@ -39,6 +39,8 @@ class KiminaEnvBackend:
             step_timeout_ms=self.config.step_timeout_ms,
             http_timeout=self.config.http_timeout_seconds,
             n_retries=self.config.retries,
+            max_overloaded_retries=self.config.max_overloaded_retries,
+            overload_backoff_seconds=self.config.overload_backoff_seconds,
         )
 
     async def close(self) -> None:

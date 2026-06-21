@@ -23,8 +23,11 @@ from leanfoundry.schemas.records import (
 )
 from leanfoundry.schemas.theorem import TheoremSpec
 from leanfoundry.schemas.trajectory import (
+    ExtractionFailure,
+    PolicyExample,
     ProofTree,
     TacticNode,
+    TrainingArtifacts,
     TrainingSample,
     TrajectoryRecord,
 )
@@ -35,14 +38,17 @@ __all__ = [
     "EnvProfile",
     "EvalArtifactManifest",
     "EvalMode",
+    "ExtractionFailure",
     "FactorizedProofState",
     "FormalStatementStagingRecord",
     "GoalComponent",
     "LocalContextEntry",
+    "PolicyExample",
     "ProofTree",
     "SamplingConfig",
     "StateRecord",
     "TacticNode",
+    "TrainingArtifacts",
     "TheoremRecord",
     "TheoremSpec",
     "TrajectoryRecord",

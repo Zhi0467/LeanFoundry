@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+
+import pytest
 
 from lean_client.exec_models import (
     ExecCreateStatesResponse,
@@ -16,6 +19,7 @@ from lean_client.exec_models import (
 
 from leanfoundry.proofsearch import (
     SearchAlgorithm,
+    SearchAttemptContext,
     SearchConfig,
     SearchStatus,
     build_engine,
@@ -86,16 +90,20 @@ class FakeEnvBackend:
         create_states: list[ExecStateInfo] | None = None,
         step_results: list[ExecStepBatchResult] | None = None,
         verify_results: list[ExecVerifyResult] | None = None,
+        cleanup_results: list[object] | None = None,
     ) -> None:
         self.create_states_result = create_states or []
         self.step_results = step_results or []
         self.verify_results = verify_results or []
+        self.cleanup_results = cleanup_results or []
         self.create_calls: list[tuple[str, str]] = []
         self.step_calls: list[
             tuple[str, str, list[str], tuple[int, ...] | None]
         ] = []
         self.verify_calls: list[tuple[str, str, str]] = []
         self.cleanup_calls: list[list[str]] = []
+        self.cancel_calls: list[list[str]] = []
+        self.events: list[tuple[str, str]] = []
 
     async def connect(self) -> None:
         pass
@@ -128,6 +136,7 @@ class FakeEnvBackend:
         env_profile: str | None = None,
     ) -> ExecCreateStatesResponse:
         self.create_calls.append((item_id, code))
+        self.events.append(("create", item_id))
         return ExecCreateStatesResponse(
             items=[
                 ExecCreateStatesResult(
@@ -150,6 +159,7 @@ class FakeEnvBackend:
         self.step_calls.append(
             (node_id, state_token, list(tactics), goal_group)
         )
+        self.events.append(("step", node_id))
         result = self.step_results.pop(0)
         return result.model_copy(update={"node_id": node_id})
 
@@ -163,6 +173,7 @@ class FakeEnvBackend:
         env_profile: str | None = None,
     ) -> ExecVerifyResult:
         self.verify_calls.append((item_id, code, theorem_name))
+        self.events.append(("verify", item_id))
         if self.verify_results:
             return self.verify_results.pop(0).model_copy(
                 update={"item_id": item_id}
@@ -175,10 +186,15 @@ class FakeEnvBackend:
 
     async def cleanup(self, item_ids: list[str]) -> object:
         self.cleanup_calls.append(item_ids)
-        return object()
+        self.events.append(("cleanup", ",".join(item_ids)))
+        if self.cleanup_results:
+            return self.cleanup_results.pop(0)
+        return cleanup_response(deleted=item_ids)
 
     async def cancel(self, item_ids: list[str]) -> object:
-        return object()
+        self.cancel_calls.append(item_ids)
+        self.events.append(("cancel", ",".join(item_ids)))
+        return SimpleNamespace(cancelled=item_ids, status="cancelled")
 
     async def stats(self) -> object:
         return object()
@@ -194,6 +210,30 @@ def theorem(
         source="test",
         theorem_name="t",
     )
+
+
+def tree_attempt(attempt_id: str = "attempt") -> SearchAttemptContext:
+    return SearchAttemptContext(
+        attempt_id=attempt_id,
+        search_item_id=f"{attempt_id}:search",
+        verify_item_id=f"{attempt_id}:verify",
+    )
+
+
+def direct_attempt(attempt_id: str = "attempt") -> SearchAttemptContext:
+    return SearchAttemptContext(
+        attempt_id=attempt_id,
+        search_item_id=None,
+        verify_item_id=f"{attempt_id}:verify",
+    )
+
+
+def cleanup_response(
+    *,
+    deleted: list[str] | None = None,
+    deferred: list[str] | None = None,
+) -> object:
+    return SimpleNamespace(deleted=deleted or [], deferred=deferred or [])
 
 
 def root_state(token: str = "root-token") -> ExecStateInfo:
@@ -274,6 +314,7 @@ def test_direct_engine_accepts_first_verified_candidate() -> None:
     result = asyncio.run(
         engine.search(
             theorem(),
+            attempt_context=direct_attempt("direct-attempt"),
             policy_client=policy,
             value_client=None,
             env_backend=env,
@@ -287,9 +328,15 @@ def test_direct_engine_accepts_first_verified_candidate() -> None:
 
     assert result.status is SearchStatus.PROVED
     assert result.search_budget_used == 2
+    assert result.attempt_id == "direct-attempt"
+    assert result.search_item_id is None
+    assert result.verify_item_id == "direct-attempt:verify"
     assert result.proof_tree is not None
     assert result.proof_tree.verified
+    assert env.verify_calls[0][0] == "direct-attempt:verify:1"
+    assert env.verify_calls[1][0] == "direct-attempt:verify:2"
     assert env.verify_calls[1][1].endswith("trivial")
+    assert env.cleanup_calls == []
     assert policy.proof_prompts == ["theorem t : True := by\n  sorry"]
 
 
@@ -320,6 +367,7 @@ def test_self_correct_feeds_back_verifier_message() -> None:
     result = asyncio.run(
         engine.search(
             theorem(),
+            attempt_context=direct_attempt("self-correct-attempt"),
             policy_client=policy,
             value_client=None,
             env_backend=env,
@@ -353,6 +401,7 @@ def test_tree_engine_extracts_and_verifies_single_tactic_proof() -> None:
     result = asyncio.run(
         engine.search(
             theorem(),
+            attempt_context=tree_attempt("tree-attempt"),
             policy_client=policy,
             value_client=None,
             env_backend=env,
@@ -360,19 +409,34 @@ def test_tree_engine_extracts_and_verifies_single_tactic_proof() -> None:
                 algorithm=SearchAlgorithm.PUCT_TREE,
                 max_tactic_calls=4,
                 tactics_per_expansion=1,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
             ),
         )
     )
 
     assert result.status is SearchStatus.PROVED
     assert result.search_budget_used == 1
+    assert result.attempt_id == "tree-attempt"
+    assert result.search_item_id == "tree-attempt:search"
+    assert result.verify_item_id == "tree-attempt:verify"
     assert result.proof_tree is not None
     assert result.proof_tree.roots[0].tactic == "trivial"
     assert result.proof_tree.rendered_lean == (
         "theorem t : True := by\n  trivial"
     )
     assert result.proof_tree.verified
-    assert env.cleanup_calls
+    assert result.training_artifacts is not None
+    assert len(result.training_artifacts.proof_candidates) == 1
+    assert result.training_artifacts.policy_examples[0].tactic == "trivial"
+    assert result.training_artifacts.value_labels[0].label == 1
+    assert env.create_calls[0][0] == "tree-attempt:search"
+    assert env.verify_calls[0][0] == "tree-attempt:verify"
+    assert env.cleanup_calls == [["tree-attempt:search"]]
+    assert env.events[-2:] == [
+        ("verify", "tree-attempt:verify"),
+        ("cleanup", "tree-attempt:search"),
+    ]
 
 
 def test_tree_engine_renders_branching_proof_shape() -> None:
@@ -422,6 +486,7 @@ def test_tree_engine_renders_branching_proof_shape() -> None:
     result = asyncio.run(
         engine.search(
             theorem("theorem t : True ∧ True := by\n  sorry"),
+            attempt_context=tree_attempt("branch-attempt"),
             policy_client=policy,
             value_client=None,
             env_backend=env,
@@ -505,6 +570,7 @@ def test_tree_engine_rejects_split_coupled_multi_goal_extraction() -> None:
     result = asyncio.run(
         engine.search(
             theorem(),
+            attempt_context=tree_attempt("coupled-attempt"),
             policy_client=policy,
             value_client=None,
             env_backend=env,
@@ -518,9 +584,100 @@ def test_tree_engine_rejects_split_coupled_multi_goal_extraction() -> None:
 
     assert result.status is SearchStatus.ERROR
     assert "multiple focused goals" in result.diagnostics["extraction_error"]
+    assert result.training_artifacts is not None
+    assert result.training_artifacts.failures[0].kind == "rendering"
     assert env.step_calls[1][3] == (0, 1)
     assert env.step_calls[2][3] == (2,)
     assert env.verify_calls == []
+
+
+def test_tree_engine_verify_rejection_emits_no_training_artifacts() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(tactic_batches=[["trivial"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="trivial", status="complete")],
+            )
+        ],
+        verify_results=[
+            ExecVerifyResult(
+                item_id="verify",
+                status="rejected",
+                theorem_name="t",
+                messages=[ExecMessage(severity="error", data="bad render")],
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("verify-reject-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.ERROR
+    assert result.proof_tree is None
+    assert result.training_artifacts is not None
+    assert result.training_artifacts.proof_candidates == []
+    assert result.training_artifacts.policy_examples == []
+    assert result.training_artifacts.value_labels == []
+    assert result.training_artifacts.failures[0].kind == "verification"
+
+
+def test_tree_engine_counts_proved_alternatives_from_one_expansion() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(tactic_batches=[["trivial", "exact True.intro"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(tactic="trivial", status="complete"),
+                    ExecStepResult(
+                        tactic="exact True.intro",
+                        status="complete",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("alternatives-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=2,
+                tactics_per_expansion=2,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.PROVED
+    assert result.training_artifacts is not None
+    assert result.proof_tree is not None
+    assert result.proof_tree.roots[0].tactic == "trivial"
+    assert result.training_artifacts.diagnostics["proved_actions"] == 2
+    assert result.training_artifacts.diagnostics["proved_alternatives"] == 1
 
 
 def test_best_first_tree_uses_child_values_for_next_frontier() -> None:
@@ -568,6 +725,7 @@ def test_best_first_tree_uses_child_values_for_next_frontier() -> None:
     result = asyncio.run(
         engine.search(
             theorem(),
+            attempt_context=tree_attempt("best-first-attempt"),
             policy_client=policy,
             value_client=values,
             env_backend=env,
@@ -612,6 +770,7 @@ def test_tree_engine_aborts_on_operational_step_status() -> None:
     result = asyncio.run(
         engine.search(
             theorem(),
+            attempt_context=tree_attempt("token-attempt"),
             policy_client=policy,
             value_client=None,
             env_backend=env,
@@ -626,6 +785,110 @@ def test_tree_engine_aborts_on_operational_step_status() -> None:
     assert result.status is SearchStatus.ERROR
     assert result.search_budget_used == 0
     assert result.diagnostics["operational_status"] == "invalid_state_token"
+    assert env.cleanup_calls
+
+
+def test_tree_engine_exhausted_open_root_emits_censored_value_only() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(tactic_batches=[["bad"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="bad",
+                        status="error",
+                        messages=[
+                            ExecMessage(
+                                severity="error",
+                                data="unknown tactic",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("exhausted-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+                value_mode="bonded",
+                censored_negative_weight=0.2,
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.EXHAUSTED
+    assert result.training_artifacts is not None
+    assert result.training_artifacts.policy_examples == []
+    assert result.training_artifacts.proof_candidates == []
+    assert len(result.training_artifacts.value_labels) == 1
+    label = result.training_artifacts.value_labels[0]
+    assert label.label == 0
+    assert label.weight == 0.2
+    assert not label.disproved
+    assert label.tactics_tried_on_subtree == 1
+
+
+def test_tree_engine_reports_mixed_overloaded_backend_protocol_error() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(tactic_batches=[["trivial", "simp"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(tactic="trivial", status="complete"),
+                    ExecStepResult(
+                        tactic="simp",
+                        status="overloaded",
+                        messages=[
+                            ExecMessage(
+                                severity="error",
+                                data="worker unavailable",
+                            )
+                        ],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("mixed-overload-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=5,
+                tactics_per_expansion=2,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.ERROR
+    assert result.search_budget_used == 1
+    assert result.diagnostics["operational_status"] == (
+        "backend_protocol_error"
+    )
+    assert "overloaded mixed" in result.diagnostics["failure_message"]
+    assert env.verify_calls == []
     assert env.cleanup_calls
 
 
@@ -657,3 +920,170 @@ def test_run_search_batch_honors_concurrency_driver_surface() -> None:
         SearchStatus.PROVED,
     ]
     assert len(env.verify_calls) == 2
+    assert [result.attempt_id for result in results]
+    assert env.cleanup_calls == []
+
+
+def test_run_search_batch_uses_runner_provided_direct_verify_ids() -> None:
+    policy = FakePolicyClient(
+        proof_batches=[
+            ["theorem t : True := by\n  trivial"],
+            ["theorem t : True := by\n  trivial"],
+        ]
+    )
+    env = FakeEnvBackend()
+
+    results = asyncio.run(
+        run_search_batch(
+            [theorem(), theorem()],
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.DIRECT,
+                max_direct_candidates=1,
+            ),
+            max_concurrent=1,
+            attempt_contexts=[
+                direct_attempt("direct-one"),
+                direct_attempt("direct-two"),
+            ],
+        )
+    )
+
+    assert [result.attempt_id for result in results] == [
+        "direct-one",
+        "direct-two",
+    ]
+    assert [call[0] for call in env.verify_calls] == [
+        "direct-one:verify:1",
+        "direct-two:verify:1",
+    ]
+    assert env.cleanup_calls == []
+
+
+def test_tree_engine_retries_deferred_cleanup_after_verification() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    context = SearchAttemptContext(
+        attempt_id="cleanup-attempt",
+        search_item_id="cleanup-attempt:search",
+        verify_item_id="cleanup-attempt:verify",
+        cleanup_max_attempts=2,
+    )
+    policy = FakePolicyClient(tactic_batches=[["trivial"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="trivial", status="complete")],
+            )
+        ],
+        cleanup_results=[
+            cleanup_response(deferred=["cleanup-attempt:search"]),
+            cleanup_response(deleted=["cleanup-attempt:search"]),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=context,
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.PROVED
+    assert result.diagnostics["cleanup_attempts"] == 2
+    assert result.diagnostics["cleanup_deleted"] == 1
+    assert result.diagnostics["cleanup_deferred"] == 0
+    assert env.cleanup_calls == [
+        ["cleanup-attempt:search"],
+        ["cleanup-attempt:search"],
+    ]
+    assert env.events[-3:] == [
+        ("verify", "cleanup-attempt:verify"),
+        ("cleanup", "cleanup-attempt:search"),
+        ("cleanup", "cleanup-attempt:search"),
+    ]
+
+
+def test_run_search_batch_cancel_calls_cancel_then_cleanup() -> None:
+    class BlockingStepEnv(FakeEnvBackend):
+        def __init__(self) -> None:
+            super().__init__(
+                create_states=[root_state()],
+                cleanup_results=[
+                    cleanup_response(deferred=["cancel-attempt:search"]),
+                    cleanup_response(deleted=["cancel-attempt:search"]),
+                ],
+            )
+            self.step_started = asyncio.Event()
+
+        async def step(
+            self,
+            node_id: str,
+            state_token: str,
+            tactics: list[str],
+            *,
+            goal_group: tuple[int, ...] | None = None,
+            timeout_ms: int | None = None,
+        ) -> ExecStepBatchResult:
+            self.step_calls.append(
+                (node_id, state_token, list(tactics), goal_group)
+            )
+            self.events.append(("step", node_id))
+            self.step_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def run_and_cancel() -> BlockingStepEnv:
+        policy = FakePolicyClient(tactic_batches=[["trivial"]])
+        env = BlockingStepEnv()
+        task = asyncio.create_task(
+            run_search_batch(
+                [theorem()],
+                policy_client=policy,
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.PUCT_TREE,
+                    max_tactic_calls=1,
+                    tactics_per_expansion=1,
+                ),
+                max_concurrent=1,
+                attempt_contexts=[
+                    SearchAttemptContext(
+                        attempt_id="cancel-attempt",
+                        search_item_id="cancel-attempt:search",
+                        verify_item_id="cancel-attempt:verify",
+                        cleanup_max_attempts=2,
+                    )
+                ],
+            )
+        )
+        await env.step_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return env
+
+    env = asyncio.run(run_and_cancel())
+
+    assert env.cancel_calls == [["cancel-attempt:search"]]
+    assert env.cleanup_calls == [
+        ["cancel-attempt:search"],
+        ["cancel-attempt:search"],
+    ]
+    assert env.events[-3:] == [
+        ("cancel", "cancel-attempt:search"),
+        ("cleanup", "cancel-attempt:search"),
+        ("cleanup", "cancel-attempt:search"),
+    ]

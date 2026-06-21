@@ -1,6 +1,20 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.9 (2026-06-21):** The first operational/extraction/lifecycle slice
+> landed. `EnvBackendConfig` forwards lean-client's existing
+> `max_overloaded_retries` and `overload_backoff_seconds` knobs; LeanFoundry
+> still has no search-loop overload retry. Training extraction now returns an
+> explicit `TrainingArtifacts` envelope with proof candidates, policy examples,
+> value labels, failures, and diagnostics. Proof/policy/proved-value artifacts
+> are gated on final `/exec/verify`; root-runtime-`OPEN` attempts become
+> top-level `EXHAUSTED` and may emit only effort-gated censored value labels.
+> `SearchAttemptContext` is runner-owned and carries separate
+> `search_item_id`/`verify_item_id`; tree search cleans checked search state
+> after verification, while cancelled runner tasks cancel and retry cleanup for
+> the search item. The proof renderer remains canonical and narrow; richer
+> identity-based focusing is still future work.
+
 > **v11.8 (2026-06-21):** The next lifecycle and extraction slices need explicit
 > contracts before code changes. Overload retry should be a backend/client config
 > pass-through (`max_overloaded_retries`, `overload_backoff_seconds`), not a

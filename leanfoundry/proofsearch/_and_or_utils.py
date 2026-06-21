@@ -4,22 +4,29 @@ from __future__ import annotations
 
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.proofsearch._common import verifier_feedback
+from leanfoundry.proofsearch._tree import SearchTree
 from leanfoundry.proofsearch.base import SearchResult, SearchStatus
+from leanfoundry.proofsearch.extraction import (
+    ExtractionContext,
+    extract_training_artifacts,
+)
 from leanfoundry.schemas import ProofTree, TheoremSpec
 
 
 async def verify_extracted_tree(
     theorem: TheoremSpec,
     env_backend: EnvBackend,
-    search_id: str,
+    verify_item_id: str,
     theorem_name: str,
     proof_tree: ProofTree,
     tactic_calls_made: int,
+    tree: SearchTree,
+    extraction_context: ExtractionContext,
 ) -> SearchResult:
     """Run final verification and build the top-level search result."""
 
     verification = await env_backend.verify_one(
-        search_id,
+        verify_item_id,
         proof_tree.rendered_lean,
         theorem_name,
         allowed_axioms=theorem.allowed_axioms,
@@ -28,11 +35,17 @@ async def verify_extracted_tree(
     verified_tree = proof_tree.model_copy(
         update={"verified": verification.status == "accepted"}
     )
+    artifacts = extract_training_artifacts(
+        tree,
+        extraction_context.with_verification_status(verification.status),
+        proof_tree=verified_tree,
+    )
     if verification.status == "accepted":
         return SearchResult(
             theorem_id=theorem.id,
             status=SearchStatus.PROVED,
             proof_tree=verified_tree,
+            training_artifacts=artifacts,
             search_budget_used=tactic_calls_made,
             diagnostics={"verifier_status": verification.status},
         )
@@ -44,7 +57,7 @@ async def verify_extracted_tree(
     return SearchResult(
         theorem_id=theorem.id,
         status=status,
-        proof_tree=verified_tree,
+        training_artifacts=artifacts,
         search_budget_used=tactic_calls_made,
         diagnostics={
             "verifier_status": verification.status,

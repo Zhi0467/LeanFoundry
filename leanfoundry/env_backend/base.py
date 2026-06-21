@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from lean_client.exec_models import (
+    ExecCancelResponse,
+    ExecCleanupResponse,
     ExecCreateStatesResponse,
     ExecLimitsResponse,
     ExecStatsResponse,
@@ -56,6 +58,23 @@ class EnvBackendConfig(LeanFoundryModel):
         default=3,
         ge=0,
         description="Transport-level retry count for retryable failures.",
+    )
+    max_overloaded_retries: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Client/backend retries for all-overloaded exec responses. These "
+            "happen before LeanFoundry sees a step result and do not count as "
+            "proof-search effort."
+        ),
+    )
+    overload_backoff_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Backoff between client/backend all-overloaded retries, in "
+            "seconds."
+        ),
     )
 
 
@@ -112,10 +131,10 @@ class EnvBackend(Protocol):
     ) -> ExecVerifyResult:
         """Certify one complete Lean proof through the warm execution pool."""
 
-    async def cleanup(self, item_ids: list[str]) -> object:
+    async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
         """Delete backend state associated with completed item ids."""
 
-    async def cancel(self, item_ids: list[str]) -> object:
+    async def cancel(self, item_ids: list[str]) -> ExecCancelResponse:
         """Cancel in-flight backend work for item ids."""
 
     async def stats(self) -> ExecStatsResponse:
