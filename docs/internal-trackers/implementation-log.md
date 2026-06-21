@@ -105,3 +105,26 @@ Validation for this slice:
 - `uv run --no-dev --with pytest pytest` passed.
 - `uv run --no-dev --with flake8 flake8 leanfoundry tests` passed.
 - `git diff --check` passed.
+
+## 2026-06-21: Synthetic Initialization Layer Clarification
+
+- Renamed and documented the runtime tree's synthetic initialization action.
+- Clarified that `ProofTree` extraction skips the synthetic root/action layer
+  and starts from the real backend-created initial states.
+
+## 2026-06-21: Retry And Terminal-State Decisions
+
+- Recorded v0 operational semantics for mixed overloaded/executed step results,
+  all-overloaded retry/backoff, and invalid state tokens.
+- Recorded training semantics for runtime `PROVED`, semantic `DISPROVED`, and
+  root-`OPEN`-at-stop unproved outcomes.
+- Expanded the tracker/design text to preserve the reasoning details:
+  operational backpressure is not search evidence, runtime `OPEN` remains the
+  unresolved tree status, and top-level `EXHAUSTED`/unproved outcomes are
+  effort-gated censored negatives.
+- Recorded follow-up review constraints: wire existing lean-client overload
+  retry knobs through backend config, expose concrete cleanup/cancel response
+  types before checked lifecycle handling, and define an explicit training
+  artifact envelope before policy/value extraction.
+- Kept extraction/rendering active because renderer correctness remains
+  unresolved beyond narrow verified fixtures.

@@ -12,7 +12,9 @@ from leanfoundry.proofsearch._expansion import goal_info_to_component
 from leanfoundry.proofsearch._tree import SearchTree
 from leanfoundry.schemas import FactorizedProofState, TheoremSpec
 
-INITIAL_BLOCK_TACTIC = "__initial_sorry_block__"
+SYNTHETIC_INITIALIZATION_ACTION_TACTIC = (
+    "__synthetic_initialization_action__"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +31,14 @@ async def initialize_search_tree(
     *,
     search_id: str,
 ) -> InitializedSearchTree:
-    """Execute the initial sorry block and build the runtime tree root."""
+    """Execute the initial Lean block and build the runtime search tree.
+
+    ``SearchTree`` has a single OR-state root, but ``/exec/create_states`` can
+    return many initial proof states, one for each sorry/hole in the Lean
+    block. We attach those backend states under one synthetic AND action so the
+    normal rule still applies: the initialization layer is closed iff every
+    initial proof state below it is closed.
+    """
 
     initial_code = initial_code_for_theorem(theorem)
     response = await env_backend.create_states(
@@ -47,27 +56,28 @@ async def initialize_search_tree(
             f"{verifier_feedback(item.status, item.messages)}"
         )
 
+    synthetic_root_state = FactorizedProofState(
+        env_profile=theorem.env_profile,
+        goal_components=[],
+        pretty_state=theorem.lean_statement,
+        state_token=None,
+    )
     tree = SearchTree.create(
         search_id,
-        FactorizedProofState(
-            env_profile=theorem.env_profile,
-            goal_components=[],
-            pretty_state=theorem.lean_statement,
-            state_token=None,
-        ),
+        synthetic_root_state,
     )
-    initial_action = tree.add_action(
+    synthetic_initialization_action = tree.add_action(
         tree.root,
-        INITIAL_BLOCK_TACTIC,
+        SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
         prior=1.0,
     )
     for state_info in item.states:
         tree.add_child_state(
-            initial_action,
+            synthetic_initialization_action,
             _state_info_to_proof_state(theorem, state_info),
         )
     if not item.states:
-        tree.mark_action_proved(initial_action)
+        tree.mark_action_proved(synthetic_initialization_action)
     return InitializedSearchTree(tree=tree, initial_code=initial_code)
 
 
@@ -97,8 +107,8 @@ def _state_info_to_proof_state(
 
 
 __all__ = [
-    "INITIAL_BLOCK_TACTIC",
     "InitializedSearchTree",
+    "SYNTHETIC_INITIALIZATION_ACTION_TACTIC",
     "initial_code_for_theorem",
     "initialize_search_tree",
 ]

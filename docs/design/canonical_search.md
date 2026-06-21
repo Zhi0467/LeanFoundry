@@ -112,7 +112,8 @@ The infra repo (LeanFoundry) owns execution, search, replay, and evaluation. The
 - `PolicyClient`: tactic sampling and proof sampling (value estimation removed — see ambiguity C)
 - `ValueClient` protocol: single method `estimate(states: list[FactorizedProofState]) -> list[float]`; `BondedValueClient` wraps `PolicyClient` with a task token for bonded mode; training repo supplies its own implementation for unbonded mode
 - `Data Buffer`: durable A-type and B-type storage; `state_value_labels` written by LeanFoundry only in bonded mode
-- `ProofTree.roots`: per-sorry proved/unproved status after search
+- `ProofTree.roots`: solved initial backend states after the runtime tree's
+  synthetic initialization layer is skipped
 
 **Training repo owns** (rollout classes implementing `BaseRollout`):
 
@@ -361,8 +362,8 @@ For search status, use three values rather than a simple Boolean:
 
 ```text
 PROVED      = solved
-DISPROVED   = impossible/dead, usually from negation pruning
-OPEN        = unresolved under current budget
+DISPROVED   = semantic falsity certificate, usually from negation pruning
+OPEN        = unresolved under the current attempt budget
 ```
 
 The important point is that **OPEN is not false**. A state can be open simply because the current policy and search budget have not solved it yet.
@@ -373,15 +374,15 @@ Propagation rules:
 State / OR node:
 
   PROVED    if ANY outgoing action is PROVED
-  OPEN      if no action is proved, but at least one action is still open
-  DISPROVED only if the state itself is disproved, or every available action is dead
+  DISPROVED only if the state itself has a semantic falsity certificate
+  OPEN      otherwise
 ```
 
 ```text
 Action / AND node:
 
   PROVED    if ALL child states are PROVED
-  DISPROVED if ANY child state is DISPROVED
+  DEAD      if ANY child state is DISPROVED
   OPEN      otherwise
 ```
 
@@ -391,12 +392,12 @@ Equivalently:
 OR node:
   OR(PROVED, OPEN, DISPROVED) = PROVED
   OR(OPEN, DISPROVED)         = OPEN
-  OR(DISPROVED, DISPROVED)    = DISPROVED, assuming these are exhaustive/dead options
+  OR(dead actions only)        = OPEN unless the state itself is DISPROVED
 
 AND node:
   AND(PROVED, PROVED)         = PROVED
   AND(PROVED, OPEN)           = OPEN
-  AND(PROVED, DISPROVED)      = DISPROVED
+  AND(PROVED, DISPROVED)      = DEAD
   AND(OPEN, OPEN)             = OPEN
 ```
 

@@ -38,11 +38,14 @@ class TacticNode(LeanFoundryModel):
 
 
 class ProofTree(LeanFoundryModel):
-    """Canonical proof tree with one root per initial sorry."""
+    """Solved proof forest below the synthetic initialization layer."""
 
     roots: list[TacticNode] = Field(
         default_factory=list,
-        description="One proof tree root per initial sorry goal.",
+        description=(
+            "One solved initial backend state per root. Each root stores that "
+            "state plus the proved tactic selected at the state."
+        ),
     )
     rendered_lean: str = Field(
         description="Lean proof text reconstructed from tactic history."

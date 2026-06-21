@@ -1,6 +1,66 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.8 (2026-06-21):** The next lifecycle and extraction slices need explicit
+> contracts before code changes. Overload retry should be a backend/client config
+> pass-through (`max_overloaded_retries`, `overload_backoff_seconds`), not a
+> second search-loop retry. Checked cleanup requires `EnvBackend.cleanup(...)`
+> and `cancel(...)` to return the concrete lean-client wire models so the runner
+> can see `deleted`/`deferred` and cancel statuses. Training extraction should
+> return an explicit artifact envelope carrying proof candidates, policy
+> examples, value labels, rendering failures, and diagnostics, with theorem,
+> attempt, verification, model-version, and effort context. Do not hide those
+> artifacts in `ProofTree` or scalar `SearchResult.diagnostics`.
+
+> **v11.7 (2026-06-21):** v0 does not distinguish runtime `OPEN` from runtime
+> `EXHAUSTED`, because LeanFoundry has no durable resume path and no deliberately
+> finite per-state LM action source. Runtime OR-state statuses remain
+> `OPEN | PROVED | DISPROVED`. A root that is still `OPEN` when the configured
+> attempt budget stops becomes the top-level `EXHAUSTED`/unproved attempt
+> outcome. That outcome may produce effort-gated censored value negatives, but no
+> policy positives and no mathematical falsity claim. `DISPROVED` is reserved for
+> synthetic negation/inversion or another future semantic falsity certificate.
+
+> **v11.6 (2026-06-21):** The next extraction slice must be training-artifact
+> extraction, not merely solved-proof projection. The current
+> `extract_proof_tree(...)` is a narrow helper for one proved proof candidate
+> before final verification: it does not emit `DISPROVED` labels,
+> root-unproved censored negatives, or alternative proved actions. Multiple
+> proved actions can exist at one OR state because one expansion sends a tactic
+> batch and attaches every executed result before the outer loop can stop on
+> `PROVED`. The training extractor must therefore make the policy/value contract
+> explicit: verified proved paths produce proof/policy data and value label 1;
+> disproved states produce full-weight value label 0 with `disproved=true`;
+> root-open-at-stop unproved attempts may produce effort-gated censored value
+> label 0. Rendering remains a separate unresolved compiler problem from proof
+> tree to Lean text.
+
+> **v11.5 (2026-06-21):** Operational and terminal-state semantics are now fixed
+> for the next implementation slice. Mixed `overloaded` plus executed tactic
+> statuses for one step item is a backend protocol failure: charge the tactics
+> that actually ran, discard partial attachments, and fail the theorem attempt.
+> All-overloaded is backpressure, not search evidence. LeanFoundry should wire
+> the existing lean-client retry/backoff knobs (`max_overloaded_retries`,
+> `overload_backoff_seconds`) through backend config instead of adding a second
+> search-loop retry layer. Those retries are outside `max_tactic_calls` and
+> outside value-label effort accounting. If all-overloaded is still returned
+> after that retry layer is exhausted, the result is an operational error, not
+> `EXHAUSTED`. `invalid_state_token` fails immediately in v0; token
+> re-derivation/restart waits for durable replay/resume. Runtime OR-states should
+> distinguish only structural `OPEN`/`PROVED` from semantic `DISPROVED`; the
+> top-level `EXHAUSTED`/unproved outcome is just root `OPEN` at attempt stop.
+> Proved states train policy/value only after final verification, disproved
+> states are full-weight value negatives, and unproved attempt outcomes are
+> effort-gated censored value negatives.
+
+> **v11.4 (2026-06-21):** Runtime tree initialization uses one synthetic root
+> OR-state and one synthetic initialization AND-action above the real
+> backend-created initial proof states. This is only a tree-shape device so the
+> same AND/OR status rule handles one or many initial holes. `ProofTree`
+> extraction skips the synthetic layer: each `ProofTree.roots` entry is built
+> from a real initial backend state, paired with the proved tactic selected at
+> that state.
+
 > **v11.3 (2026-06-21):** The first concrete search-engine loop slice landed:
 > direct whole-proof search and AND/OR tree search now sit behind a
 > `build_engine(config)` factory. The tree wedge takes a pluggable selection
@@ -3901,9 +3961,24 @@ class TacticNode:
 
 @dataclass
 class ProofTree:
-    roots: list[TacticNode]   # one per sorry in initial block
+    roots: list[TacticNode]   # one solved initial backend state per root
     rendered_lean: str         # canonical text reconstructed from tactic history
 ```
+
+Runtime search initialization has a synthetic wrapper above these roots:
+
+```
+synthetic root OR-state
+  synthetic initialization AND-action
+    real initial backend state 1
+    real initial backend state 2
+    ...
+```
+
+That wrapper is not training data. It exists only because `SearchTree` has one
+root while `/exec/create_states` may return multiple initial states. Extraction
+starts below the wrapper and turns each real initial state into one
+`ProofTree.roots` entry by pairing the state with its proved action.
 
 Three uses from one representation:
 - `rendered_lean`: Lean proof text for final verification
@@ -3922,14 +3997,33 @@ Three label types:
 
 | State | Label | Weight | `disproved` |
 |-------|-------|--------|-------------|
-| On proved path in proof tree | 1 | 1.0 | False |
+| On verified proved path in proof tree | 1 | 1.0 | False |
 | Negation proved (DISPROVED) | 0 | 1.0 | True |
 | Searched but not proved, ≥50 tactics tried | 0 | 0.25* | False |
 
 *Weight 0.25 is a guess. Needs ablation (see R3).
 
+In v0, runtime `OPEN` is not a durable resume state. A root that is still
+`OPEN` when the configured attempt budget stops becomes the top-level
+`EXHAUSTED`/unproved attempt outcome. That outcome is not theorem falsity, but
+it may produce censored value-label data after the effort gate.
+
 States searched with < min_effort tactics are excluded — too few attempts
 to confidently label as negative.
+
+Root-outcome interpretation:
+
+- `PROVED` is only training evidence after the extracted `rendered_lean` passes
+  final `/exec/verify`. Before that, it is a structural closure of the runtime
+  tree, not an accepted proof.
+- `DISPROVED` means a negation search proved falsity for the state being
+  disproved. The original state receives a full-weight value-negative label.
+  The tactics inside the negation proof can be positive policy data for the
+  synthetic negation goal, not for the original goal.
+- `EXHAUSTED`/unproved means the attempt stopped with the root still `OPEN`
+  after spending its configured effort. This is a censored negative only; it may
+  train value after the effort gate, but it is not policy data and not
+  mathematical falsity.
 
 ---
 
@@ -3963,7 +4057,7 @@ Pipeline (training repo):
 5. Build `initial_lean_block` with all sorry-d lemmas + main theorem
 6. Pass to `SearchEngine` via `TheoremSpec(initial_lean_block=block)`
 7. SearchEngine runs MCGS; lemma dependencies handled by Lean automatically
-8. Read `ProofTree.roots` to determine proved/unproved lemmas
+8. Read `ProofTree.roots` to determine proved/unproved initial states
 9. If fails: annotate and revise decomposition; go to step 1
 
 The informal proof context conditioning the policy during search is provided

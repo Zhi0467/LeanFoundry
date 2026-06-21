@@ -21,18 +21,26 @@ class UnsupportedProofExtraction(ValueError):
 
 
 def extract_proof_tree(tree: SearchTree, theorem: TheoremSpec) -> ProofTree:
-    """Project a proved runtime tree into a durable ``ProofTree``."""
+    """Project a proved runtime tree into a durable ``ProofTree``.
 
-    initial_action = tree.root.proved_action()
-    if initial_action is None:
+    Runtime tree initialization has one synthetic root state and one synthetic
+    initialization action above the real backend-created initial states.
+    Extraction intentionally skips that synthetic layer. Each ``ProofTree``
+    root is built from one real initial state, paired with the proved tactic
+    selected at that state.
+    """
+
+    synthetic_initialization_action = tree.root.proved_action()
+    if synthetic_initialization_action is None:
         raise ValueError("cannot extract proof tree from unproved root")
 
     roots = [
         _tactic_node_from_state(child, depth=0)
-        for child in initial_action.children
+        for child in synthetic_initialization_action.children
     ]
     proof_scripts = [
-        _render_state_proof(child) for child in initial_action.children
+        _render_state_proof(child)
+        for child in synthetic_initialization_action.children
     ]
     rendered_lean = _render_lean_with_proofs(theorem, proof_scripts)
     return ProofTree(
