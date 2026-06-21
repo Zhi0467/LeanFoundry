@@ -1,11 +1,10 @@
 # LeanFoundry Internal Todo
 
-This file is future-facing. Use it to plan the next slices, track unresolved
-design questions, and keep the active implementation queue honest.
+This file is future-facing: active implementation plans, unresolved design
+questions, and remaining work.
 
 Historical implementation notes live in
-[`implementation-log.md`](implementation-log.md). When a slice lands, remove or
-update its todo item here and append a dated entry to the implementation log.
+[`implementation-log.md`](implementation-log.md).
 
 ## Current Contracts
 
@@ -161,13 +160,3 @@ tree-search semantics.
 10. Graph/MCGS
     - Deferred until a complete state-identity fingerprint exists.
     - Do not optimize for graph merging before proving the tree path.
-
-## Slice Update Rule
-
-For each new slice:
-
-1. Add or edit the relevant active todo item before implementation.
-2. Keep code changes narrow and aligned with the current contracts above.
-3. Run targeted tests, full tests, lint, and `git diff --check`.
-4. Move completed implementation notes to `implementation-log.md`.
-5. Leave `todo.md` focused on what remains to decide or build.

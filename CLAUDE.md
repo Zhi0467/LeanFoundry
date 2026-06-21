@@ -24,3 +24,10 @@ re-deriving context. Keep both concise.
 Inherited global rules still apply: descriptive variable names; `uv` +
 `pyproject.toml` for deps; separate utilities from entry points and public from
 private functions; ask before pushing to GitHub.
+
+Operational rules and conversation-derived working preferences belong in
+`AGENTS.md` and this file, not in internal tracker docs. When a discussion
+changes how agents should work in this repo, update these files. Keep `todo.md`
+future-facing; put completed slice notes in
+`docs/internal-trackers/implementation-log.md`; validate changes with targeted
+tests, full tests, lint, and `git diff --check`.

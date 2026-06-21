@@ -65,6 +65,13 @@ consumer that plugs in via stable interfaces.
   and private functions in different files.
 - Deps via `uv` + `pyproject.toml`. Tests: `uv run --no-dev --with pytest
   pytest`. Lint: `flake8` (79 cols).
+- Operational rules and conversation-derived working preferences live here and
+  in `CLAUDE.md`, not in internal tracker docs. When a discussion changes how
+  agents should work in this repo, update these files. For each new slice: edit
+  `todo.md` before implementation when planning changes are needed; keep
+  implementation notes in `implementation-log.md`; run targeted tests, full
+  tests, lint, and `git diff --check`; leave `todo.md` focused on unresolved or
+  future work.
 - Git: **commit directly to `main`** — do not create a feature branch unless
   asked. Still **ask before any `git push`**.
 
