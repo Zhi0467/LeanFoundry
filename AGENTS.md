@@ -30,12 +30,18 @@ consumer that plugs in via stable interfaces.
 - Expansion splits goals by metavariable coupling: independent subgoals become
   separate AND children resumed via the backend's `goal_group` focus (verified
   live; `auto_resume` is NOT group focus); coupled goals stay bundled.
-- The AND/OR engine loop (`and_or.py`) is the active slice. Clients
-  (policy/value/env) are INJECTED into `search()` by a composition root, never
-  built by the engine. `value_mode` is a label-emission flag, not a value source.
-  Policy/value are async streaming calls (SGLang continuous-batches — no manual
-  batching); searches run concurrent + pipelined; value backup is AND/OR-aware
-  (conjunction at AND nodes). See the tracker's "Search Engine Loop" section.
+- The search engine is the active slice, across TWO wedges behind the
+  `SearchEngine` Protocol (a `build_engine(config)` factory dispatches on
+  `config.algorithm`): a direct whole-proof wedge (`direct.py`: `sample_proofs` ->
+  verify; direct + completion-with-feedback) and the AND/OR tree wedge
+  (`and_or.py`). The tree wedge takes a pluggable `SelectionStrategy` (PUCT,
+  best-first) — NEVER inline a selection criterion. Clients (policy/value/env) are
+  INJECTED into `search()` by a composition root, never built by the engine;
+  `value_mode` is a label-emission flag, not a value source. Policy/value are
+  async streaming calls (SGLang continuous-batches — no manual batching); searches
+  run concurrent + pipelined; value backup is AND/OR-aware (conjunction at AND
+  nodes). First algorithms: direct completion, completion-with-feedback, PUCT,
+  best-first; graph/MCGS deferred. See the tracker's "Search Engine Loop" section.
 
 ## How to work here (maintainer's standing preferences)
 

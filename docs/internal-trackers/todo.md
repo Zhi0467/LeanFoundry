@@ -572,12 +572,43 @@ Applied 2026-06-20:
 
 ## Search Engine Loop: Design + Handoff Slice (2026-06-20)
 
-The next slice is `and_or.py` (the concrete AND/OR tree-search `SearchEngine`)
-plus a concurrent driver, value backup, final verification, and `_extract.py`.
-This captures the design settled in discussion; build it pipeline-ready from the
-start.
+The next slice implements the search engine across TWO wedges — the direct
+whole-proof wedge and the AND/OR tree wedge — plus a concurrent driver, value
+backup, final verification, and `_extract.py`. Build it modular and
+pipeline-ready from the start. This captures the design settled in discussion.
 
-### Per-iteration loop (one search tree)
+### Where search algorithms live (two wedges + a pluggable peg)
+
+Two levels of variation, two seams — never inline a selection criterion into a
+loop. The modularity is justified now because each seam ships with >= 2 concrete
+impls from day one (so it is not speculative).
+
+1. Search SHAPE = the wedge: one `SearchEngine` impl per shape, chosen by a small
+   `build_engine(config) -> SearchEngine` factory on `config.algorithm`. The
+   composition root picks the config; the factory wires the engine; the engine is
+   handed the injected clients.
+   - Direct (whole-proof) wedge — `direct.py`: `policy_client.sample_proofs` ->
+     `verify_one`, no tree, no value model. Two variants: `DIRECT` (one round of n
+     samples, keep any that verify) and `SELF_CORRECT` / completion-with-feedback
+     (resample with the verifier's error message fed back, up to a round budget).
+   - Tree (AND/OR) wedge — `and_or.py`: the select/expand/evaluate/backprop loop
+     below.
+   - Graph (MCGS) wedge — deferred.
+2. Within the tree wedge, the SELECTION POLICY = the peg: a pluggable
+   `SelectionStrategy` the loop calls (`select(tree) -> open StateNode | None`),
+   NEVER inlined. The loop, expansion, value interface, AND/OR machinery, and
+   backprop are shared across pegs; only `select` differs (a weaker peg simply
+   reads fewer fields). First two pegs in `_selection.py`:
+   - `PuctSelection` — prior+value+visit UCB descent from the root, hardest-child
+     at AND nodes (today's `select_frontier_state` logic, behind the Protocol).
+   - `BestFirstSelection` — global argmax over open leaf states by value; ignores
+     visits (no exploration term).
+   The tree engine takes a `SelectionStrategy` and scores nothing itself.
+
+First algorithms to implement: direct completion + completion-with-feedback
+(direct wedge); PUCT + best-first (tree wedge). MCGS/graph deferred.
+
+### Per-iteration loop (tree wedge)
 
 Four phases, run per selected node until budget exhausts or the root resolves,
 then verify and extract:
@@ -644,20 +675,32 @@ its subgoals instead of the product). The status propagation already in
 
 ### Slice scope
 
-Build now: `and_or.py` loop (select / expand / evaluate-gated / backprop); the
-concurrent driver (asyncio tasks + in-flight cap, limits cached at connect); the
-gated async evaluate site + AND/OR value backup in `_backprop.py`;
-operational-status handling (act on `ExpansionOutcome.operational_status` —
-re-derive the token or abort; cannot rely on budget, since operational failures
-cost 0 → livelock otherwise); final `verify_one` on the assembled proof (tree
-PROVED is structural only); `_extract.py` (solved slice -> `ProofTree`). Test with
-FAKE policy + value clients so the pipeline and value backup are exercised; the
-value-free path (`value_client=None`) must also pass.
+Build now:
+- Direct wedge `direct.py`: `sample_proofs` -> `verify_one`; two variants —
+  `DIRECT` (one-shot n samples) and `SELF_CORRECT` (resample with the verifier's
+  error fed back, up to a round budget). No tree, no value model.
+- Tree wedge `and_or.py`: the loop (select / expand / evaluate-gated / backprop),
+  taking an INJECTED `SelectionStrategy` — the loop scores nothing itself.
+- `_selection.py`: `SelectionStrategy` Protocol + `PuctSelection` +
+  `BestFirstSelection` (today's UCB logic moves behind the Protocol).
+- `build_engine(config) -> SearchEngine` factory dispatching on `config.algorithm`
+  (direct/self-correct -> `direct.py`; puct/best-first -> `and_or.py` + the peg).
+- Concurrent driver (asyncio tasks + in-flight cap, limits cached at connect),
+  pipelined per the throughput section.
+- Gated async evaluate site + AND/OR value backup in `_backprop.py` (tree wedge).
+- Operational-status handling (act on `ExpansionOutcome.operational_status` —
+  re-derive the token or abort; cannot rely on budget, since operational failures
+  cost 0 → livelock otherwise).
+- Final `verify_one` on the assembled proof (tree PROVED is structural only);
+  `_extract.py` (solved slice -> `ProofTree`).
+- Tests with FAKE policy + value clients across BOTH wedges and BOTH tree pegs;
+  the value-free path (`value_client=None`) must also pass.
 
 This revises R1 ("prior-only first"): the evaluate site + value-backup WIRING are
 now in-slice so the pipeline is real and fake-tested; only the value-MODEL impl
 (and the bonded factory) stay deferred. Value-free remains the gated default.
 
-Deferred (stub/inject later): real SGLang/Slime PolicyClient/ValueClient impls;
-the bonded `wrap(policy) -> value` factory; the runner / composition root; value
-labels beyond the proved case; negation pruning; HER.
+Deferred (stub/inject later): graph/MCGS wedge; real SGLang/Slime
+PolicyClient/ValueClient impls; the bonded `wrap(policy) -> value` factory; the
+runner / composition root; value labels beyond the proved case; negation pruning;
+HER.
