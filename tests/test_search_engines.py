@@ -1015,6 +1015,68 @@ def test_tree_engine_retries_deferred_cleanup_after_verification() -> None:
     ]
 
 
+def test_tree_engine_cleans_search_state_on_unexpected_error() -> None:
+    class RaisingPolicyClient(FakePolicyClient):
+        async def sample_tactics(
+            self,
+            states,
+            *,
+            n: int,
+            params=None,
+        ) -> list[list[str]]:
+            raise RuntimeError("policy unavailable")
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    env = FakeEnvBackend(create_states=[root_state()])
+
+    with pytest.raises(RuntimeError, match="policy unavailable"):
+        asyncio.run(
+            engine.search(
+                theorem(),
+                attempt_context=tree_attempt("unexpected-error-attempt"),
+                policy_client=RaisingPolicyClient(),
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.PUCT_TREE,
+                    max_tactic_calls=1,
+                    tactics_per_expansion=1,
+                ),
+            )
+        )
+
+    assert env.cancel_calls == []
+    assert env.cleanup_calls == [["unexpected-error-attempt:search"]]
+
+
+def test_tree_engine_does_not_cleanup_before_search_state_exists() -> None:
+    class LimitsErrorEnv(FakeEnvBackend):
+        async def limits(self) -> ExecLimitsResponse:
+            raise RuntimeError("limits unavailable")
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    env = LimitsErrorEnv()
+
+    with pytest.raises(RuntimeError, match="limits unavailable"):
+        asyncio.run(
+            engine.search(
+                theorem(),
+                attempt_context=tree_attempt("limits-error-attempt"),
+                policy_client=FakePolicyClient(tactic_batches=[["trivial"]]),
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.PUCT_TREE,
+                    max_tactic_calls=1,
+                    tactics_per_expansion=1,
+                ),
+            )
+        )
+
+    assert env.create_calls == []
+    assert env.cleanup_calls == []
+
+
 def test_run_search_batch_cancel_calls_cancel_then_cleanup() -> None:
     class BlockingStepEnv(FakeEnvBackend):
         def __init__(self) -> None:

@@ -86,8 +86,12 @@ class AndOrSearchEngine(SearchEngine):
 
         search_item_id = attempt_context.search_item_id
         tree: SearchTree | None = None
+        cleanup_needed = False
+        cleanup_attempted = False
 
         async def finish(result: SearchResult) -> SearchResult:
+            nonlocal cleanup_attempted
+            cleanup_attempted = True
             cleanup_report = await cleanup_search_state(
                 env_backend,
                 attempt_context,
@@ -100,6 +104,7 @@ class AndOrSearchEngine(SearchEngine):
 
         try:
             limits = await env_backend.limits()
+            cleanup_needed = True
             initialized = await initialize_search_tree(
                 env_backend,
                 theorem,
@@ -215,6 +220,10 @@ class AndOrSearchEngine(SearchEngine):
                     },
                 )
             )
+        except Exception:
+            if cleanup_needed and not cleanup_attempted:
+                await cleanup_search_state(env_backend, attempt_context)
+            raise
 
 
 __all__ = [

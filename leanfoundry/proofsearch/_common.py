@@ -15,12 +15,6 @@ _THEOREM_NAME_RE = re.compile(
 )
 
 
-def make_search_id(theorem: TheoremSpec, *, kind: str) -> str:
-    """Return a backend item id that is unique across concurrent searches."""
-
-    return make_attempt_id(theorem, kind=kind)
-
-
 def make_attempt_id(theorem: TheoremSpec, *, kind: str) -> str:
     """Return a runner-owned id for one theorem attempt."""
 
@@ -106,7 +100,6 @@ def verifier_feedback(
 __all__ = [
     "make_attempt_context",
     "make_attempt_id",
-    "make_search_id",
     "result_with_attempt_context",
     "theorem_name_for_verify",
     "verifier_feedback",
