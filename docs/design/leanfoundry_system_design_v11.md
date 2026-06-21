@@ -1,6 +1,21 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.3 (2026-06-21):** The first concrete search-engine loop slice landed:
+> direct whole-proof search and AND/OR tree search now sit behind a
+> `build_engine(config)` factory. The tree wedge takes a pluggable selection
+> strategy and uses product backup for AND-action child values plus max backup
+> for OR-state action values; terminal status still comes from the structural
+> tree, and final `/exec/verify` remains the acceptance gate. Graph/MCGS,
+> negation pruning, HER, real model adapters, and bonded value-label emission
+> remain deferred. The first extractor intentionally rejects split actions with
+> a multi-goal focused child, rather than emitting a misleading one-bullet Lean
+> script; richer group-focus rendering is deferred. Direct whole-proof search
+> uses its own `max_direct_candidates` / `direct_candidates_per_round` budget
+> fields, separate from tree-search `max_tactic_calls`. Tree-selection
+> hyperparameters are explicit config fields: `puct_exploration_weight` and
+> `best_first_missing_value_score`.
+
 > **v11.2 (2026-06-19):** v0 search is AND/OR **tree** search, not graph search.
 > States reached by different paths are **not merged**, because sound merging
 > needs a state-identity fingerprint that captures Lean state the pretty-print

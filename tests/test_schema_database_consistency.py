@@ -116,7 +116,11 @@ def test_search_config_exposes_design_derived_search_budget_fields() -> None:
 
     for field_name in {
         "max_tactic_calls",
+        "max_direct_candidates",
         "tactics_per_expansion",
+        "puct_exploration_weight",
+        "best_first_missing_value_score",
+        "direct_candidates_per_round",
         "try_negation",
         "censored_negative_weight",
         "min_censored_negative_effort",

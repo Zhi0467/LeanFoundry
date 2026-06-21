@@ -46,6 +46,7 @@ class StateNode:
     parent_action: ActionNode | None = None
     actions: list[ActionNode] = field(default_factory=list)
     status: StateNodeStatus = StateNodeStatus.OPEN
+    value_estimate: float | None = None
     visit_count: int = 0
     failure_message: str | None = None
 

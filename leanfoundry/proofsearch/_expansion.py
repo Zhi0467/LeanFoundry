@@ -23,6 +23,8 @@ from leanfoundry.schemas import (
     LocalContextEntry,
 )
 
+_FATAL_OPERATIONAL_STATUSES = frozenset({"invalid_state_token", "cancelled"})
+
 
 @dataclass(frozen=True, slots=True)
 class ExpansionOutcome:
@@ -103,13 +105,27 @@ async def expand_state(
         completed_attempts=completed_attempts,
     )
 
+    fatal_result = _first_fatal_operational_result(step_batch_result.results)
+    if fatal_result is not None:
+        state_node.failure_message = _step_failure_message(fatal_result)
+        return ExpansionOutcome(
+            actions=[],
+            tactic_calls_used=completed_attempts,
+            operational_status=fatal_result.status,
+        )
+
+    first_overloaded_result = _first_overloaded_result(
+        step_batch_result.results
+    )
+    if first_overloaded_result is not None and completed_attempts > 0:
+        raise ValueError(
+            "backend returned overloaded mixed with executed step results"
+        )
+
     actions: list[ActionNode] = []
-    operational_status: str | None = None
     for index, step_result in enumerate(step_batch_result.results):
         tactic, prior = new_priors[index]
         if not step_result_ran_lean(step_result):
-            operational_status = step_result.status
-            state_node.failure_message = _step_failure_message(step_result)
             continue
         actions.append(
             _attach_step_result(
@@ -119,6 +135,12 @@ async def expand_state(
                 tactic=tactic,
                 prior=prior,
             )
+        )
+    operational_status = None
+    if not actions and first_overloaded_result is not None:
+        operational_status = first_overloaded_result.status
+        state_node.failure_message = _step_failure_message(
+            first_overloaded_result
         )
     return ExpansionOutcome(
         actions=actions,
@@ -277,6 +299,24 @@ def _single_policy_batch(sampled_batches: list[list[str]]) -> list[str]:
     if len(sampled_batches) != 1:
         raise ValueError("policy_client must return one tactic batch")
     return sampled_batches[0]
+
+
+def _first_fatal_operational_result(
+    step_results: list[ExecStepResult],
+) -> ExecStepResult | None:
+    for step_result in step_results:
+        if step_result.status in _FATAL_OPERATIONAL_STATUSES:
+            return step_result
+    return None
+
+
+def _first_overloaded_result(
+    step_results: list[ExecStepResult],
+) -> ExecStepResult | None:
+    for step_result in step_results:
+        if step_result.status == "overloaded":
+            return step_result
+    return None
 
 
 def _render_pretty_state(components: list[GoalComponent]) -> str:

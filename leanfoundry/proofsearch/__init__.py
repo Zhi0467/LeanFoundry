@@ -7,6 +7,8 @@ from leanfoundry.proofsearch.base import (
     SearchResult,
     SearchStatus,
 )
+from leanfoundry.proofsearch.driver import run_search_batch
+from leanfoundry.proofsearch.factory import build_engine
 from leanfoundry.proofsearch.provenance import should_try_negation
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     "SearchEngine",
     "SearchResult",
     "SearchStatus",
+    "build_engine",
+    "run_search_batch",
     "should_try_negation",
 ]

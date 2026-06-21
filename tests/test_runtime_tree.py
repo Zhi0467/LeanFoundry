@@ -9,6 +9,8 @@ from leanfoundry.proofsearch._budgets import (
     remaining_tactic_calls,
 )
 from leanfoundry.proofsearch._selection import (
+    BestFirstSelection,
+    PuctSelection,
     empirical_action_priors,
     select_action,
     select_frontier_state,
@@ -202,3 +204,42 @@ def test_select_frontier_uses_value_free_hardest_child() -> None:
     tree.mark_action_proved(hard_action)
 
     assert select_frontier_state(tree.root) is easy
+
+
+def test_puct_selection_wraps_frontier_descent() -> None:
+    tree = SearchTree.create("search", make_state(1))
+    action = tree.add_action(tree.root, "constructor", prior=1.0)
+    easy = tree.add_child_state(action, make_state(1, token="easy"))
+    hard = tree.add_child_state(action, make_state(3, token="hard"))
+
+    assert PuctSelection().select(tree) is hard
+
+    hard_action = tree.add_action(hard, "exact h", prior=1.0)
+    tree.mark_action_proved(hard_action)
+
+    assert PuctSelection().select(tree) is easy
+
+
+def test_best_first_selection_uses_leaf_value_estimates() -> None:
+    tree = SearchTree.create("search", make_state(1))
+    action = tree.add_action(tree.root, "constructor", prior=1.0)
+    low = tree.add_child_state(action, make_state(1, token="low"))
+    high = tree.add_child_state(action, make_state(1, token="high"))
+    low.value_estimate = 0.1
+    high.value_estimate = 0.9
+
+    assert BestFirstSelection().select(tree) is high
+
+
+def test_best_first_selection_uses_configured_missing_value_score() -> None:
+    tree = SearchTree.create("search", make_state(1))
+    action = tree.add_action(tree.root, "constructor", prior=1.0)
+    unknown = tree.add_child_state(action, make_state(1, token="unknown"))
+    known = tree.add_child_state(action, make_state(1, token="known"))
+    known.value_estimate = 0.2
+
+    assert BestFirstSelection().select(tree) is known
+    assert (
+        BestFirstSelection(missing_value_score=0.5).select(tree)
+        is unknown
+    )

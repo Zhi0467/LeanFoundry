@@ -134,6 +134,15 @@ def test_proof_states_single_group_steps_whole_state_without_focus() -> None:
     assert [g.target for g in children[0].state.goal_components] == ["A"]
 
 
+def test_proof_states_reject_invalid_sibling_dependency() -> None:
+    with pytest.raises(ValueError, match="sibling_dep"):
+        proof_states_from_goals(
+            make_state(),
+            state_token="child-token",
+            goals=[ExecGoalInfo(target="A", pretty="|- A", sibling_dep=[1])],
+        )
+
+
 def test_expand_state_calls_policy_and_backend_once() -> None:
     tree = SearchTree.create("search", make_state())
     policy = FakePolicyClient(
@@ -314,6 +323,127 @@ def test_expand_state_surfaces_operational_status_without_budget() -> None:
     assert outcome.operational_status == "invalid_state_token"
     assert tree.tactic_calls_made == 0
     assert tree.root.failure_message == "error: state token expired"
+
+
+def test_expand_state_rejects_mixed_overloaded_and_executed_results() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["trivial", "simp"])
+    env_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(tactic="trivial", status="complete"),
+                ExecStepResult(
+                    tactic="simp",
+                    status="overloaded",
+                    messages=[
+                        ExecMessage(
+                            severity="error",
+                            data="worker unavailable",
+                        )
+                    ],
+                ),
+            ],
+        )
+    )
+
+    with pytest.raises(ValueError, match="overloaded mixed"):
+        asyncio.run(
+            expand_state(
+                tree,
+                tree.root,
+                policy_client=policy,
+                env_backend=env_backend,
+                config=SearchConfig(
+                    max_tactic_calls=5,
+                    tactics_per_expansion=2,
+                ),
+            )
+        )
+
+    assert tree.tactic_calls_made == 1
+    assert tree.root.actions == []
+    assert tree.root.status is StateNodeStatus.OPEN
+    assert tree.root.failure_message is None
+
+
+def test_expand_state_surfaces_all_overloaded_results_without_budget() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["trivial", "simp"])
+    env_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(
+                    tactic="trivial",
+                    status="overloaded",
+                    messages=[
+                        ExecMessage(
+                            severity="error",
+                            data="worker unavailable",
+                        )
+                    ],
+                ),
+                ExecStepResult(tactic="simp", status="overloaded"),
+            ],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=env_backend,
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=2),
+        )
+    )
+
+    assert outcome.actions == []
+    assert outcome.tactic_calls_used == 0
+    assert outcome.operational_status == "overloaded"
+    assert tree.tactic_calls_made == 0
+    assert tree.root.failure_message == "error: worker unavailable"
+
+
+def test_expand_state_discards_partial_actions_on_fatal_status() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["trivial", "simp"])
+    env_backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(tactic="trivial", status="complete"),
+                ExecStepResult(
+                    tactic="simp",
+                    status="cancelled",
+                    messages=[
+                        ExecMessage(
+                            severity="error",
+                            data="item cancelled",
+                        )
+                    ],
+                ),
+            ],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=env_backend,
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=2),
+        )
+    )
+
+    assert outcome.actions == []
+    assert outcome.tactic_calls_used == 1
+    assert outcome.operational_status == "cancelled"
+    assert tree.tactic_calls_made == 1
+    assert tree.root.status is StateNodeStatus.OPEN
+    assert tree.root.failure_message == "error: item cancelled"
 
 
 def test_expand_state_treats_open_empty_goals_as_structurally_proved() -> None:

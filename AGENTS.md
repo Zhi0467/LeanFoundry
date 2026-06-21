@@ -30,18 +30,21 @@ consumer that plugs in via stable interfaces.
 - Expansion splits goals by metavariable coupling: independent subgoals become
   separate AND children resumed via the backend's `goal_group` focus (verified
   live; `auto_resume` is NOT group focus); coupled goals stay bundled.
-- The search engine is the active slice, across TWO wedges behind the
-  `SearchEngine` Protocol (a `build_engine(config)` factory dispatches on
-  `config.algorithm`): a direct whole-proof wedge (`direct.py`: `sample_proofs` ->
-  verify; direct + completion-with-feedback) and the AND/OR tree wedge
-  (`and_or.py`). The tree wedge takes a pluggable `SelectionStrategy` (PUCT,
-  best-first) — NEVER inline a selection criterion. Clients (policy/value/env) are
-  INJECTED into `search()` by a composition root, never built by the engine;
-  `value_mode` is a label-emission flag, not a value source. Policy/value are
-  async streaming calls (SGLang continuous-batches — no manual batching); searches
-  run concurrent + pipelined; value backup is AND/OR-aware (conjunction at AND
-  nodes). First algorithms: direct completion, completion-with-feedback, PUCT,
-  best-first; graph/MCGS deferred. See the tracker's "Search Engine Loop" section.
+- The first concrete search-engine loop slice is implemented across TWO wedges
+  behind the `SearchEngine` Protocol and `build_engine(config)`: direct
+  whole-proof search (`direct.py`: `sample_proofs` -> verify; direct +
+  completion-with-feedback) and AND/OR tree search (`and_or.py`). The tree wedge
+  takes a pluggable `SelectionStrategy` (PUCT, best-first) — NEVER inline a
+  selection criterion. Clients (policy/value/env) are INJECTED into `search()` by
+  a composition root, never built by the engine; `value_mode` is a label-emission
+  flag, not a value source. Value backup uses product over AND children and max
+  over OR actions; final `/exec/verify` is still required. Direct whole-proof
+  search uses `max_direct_candidates` / `direct_candidates_per_round`; tree
+  search uses `max_tactic_calls` plus selector knobs
+  `puct_exploration_weight` / `best_first_missing_value_score`. Deferred:
+  graph/MCGS, negation pruning, HER, real model adapters, bonded value
+  factory/labels, and richer proof rendering for split children that own
+  multiple focused goals.
 
 ## How to work here (maintainer's standing preferences)
 
@@ -55,8 +58,9 @@ consumer that plugs in via stable interfaces.
 - **Persist decisions in the repo, not just chat.** The design doc
   (`docs/design/leanfoundry_system_design_v11.md`) is mutable: edit it
   surgically with a dated `> **v11.x (date):**` note plus the minimal local
-  change — never a rewrite. Mirror decisions into the plan/tracker
-  (`docs/internal-trackers/todo.md`).
+  change — never a rewrite. Mirror future work into
+  `docs/internal-trackers/todo.md` and completed slice notes into
+  `docs/internal-trackers/implementation-log.md`.
 - Descriptive variable names. Separate utilities from entry points; keep public
   and private functions in different files.
 - Deps via `uv` + `pyproject.toml`. Tests: `uv run --no-dev --with pytest
@@ -68,10 +72,9 @@ consumer that plugs in via stable interfaces.
 
 - System design: `docs/design/leanfoundry_system_design_v11.md`.
 - Algorithm reference: `docs/design/canonical_search.md` (Aristotle + analysis).
-- Plan and decision log: `docs/internal-trackers/todo.md`.
+- Future-facing plan: `docs/internal-trackers/todo.md`.
+- Completed slice log: `docs/internal-trackers/implementation-log.md`.
 - Schemas: `leanfoundry/schemas/`. Interfaces: `env_backend/`, `policy/`,
   `proofsearch/`, `rl_engine/`.
-- Next slice: the AND/OR engine loop + concurrent driver + verify + extraction —
-  see the todo's "Search Engine Loop: Design + Handoff Slice" section (the full
-  handoff spec). Earlier context: the "Next" and "Bugs and Recommendations"
-  sections.
+- Next slice: real policy/value adapters or the deferred training-data pieces
+  (bonded value-label emission, negation pruning, HER), depending on the tracker.

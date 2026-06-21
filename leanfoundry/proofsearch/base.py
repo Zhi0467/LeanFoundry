@@ -21,6 +21,7 @@ class SearchAlgorithm(StrEnum):
     TACTIC_BEAM = "tactic_beam"
     BEST_FIRST = "best_first"
     PUCT_TREE = "puct_tree"
+    AND_OR_TREE = "and_or_tree"
     OPTIMISTIC = "optimistic"
     MCGS = "mcgs"
     AND_OR_MCGS = "and_or_mcgs"
@@ -40,7 +41,7 @@ class SearchConfig(LeanFoundryModel):
     """Algorithm-neutral search configuration."""
 
     algorithm: SearchAlgorithm = Field(
-        default=SearchAlgorithm.TACTIC_BEAM,
+        default=SearchAlgorithm.PUCT_TREE,
         description="Search strategy to run for this theorem.",
     )
     max_tactic_calls: int = Field(
@@ -48,10 +49,43 @@ class SearchConfig(LeanFoundryModel):
         ge=1,
         description="Hard budget on Lean tactic attempts for one theorem.",
     )
+    max_direct_candidates: int = Field(
+        default=64,
+        ge=1,
+        description=(
+            "Hard cap on whole-proof candidates verified by DIRECT or "
+            "SELF_CORRECT search. This is the pass@k-style budget for "
+            "direct sampling, distinct from Lean tactic-call budgets."
+        ),
+    )
     tactics_per_expansion: int = Field(
         default=8,
         ge=1,
         description="Number of policy tactic candidates per expanded state.",
+    )
+    puct_exploration_weight: float = Field(
+        default=1.0,
+        ge=0,
+        description=(
+            "PUCT exploration multiplier for tree search. Larger values "
+            "favor high-prior, under-visited actions; zero disables the "
+            "exploration bonus."
+        ),
+    )
+    best_first_missing_value_score: float = Field(
+        default=0.0,
+        description=(
+            "Score assigned by BEST_FIRST to open leaf states with no value "
+            "estimate. The default preserves value-free structural fallback."
+        ),
+    )
+    direct_candidates_per_round: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Whole-proof candidates sampled for one self-correction prompt "
+            "round. DIRECT uses max_direct_candidates in its single round."
+        ),
     )
     try_negation: bool = Field(
         default=False,
@@ -97,7 +131,11 @@ class SearchResult(LeanFoundryModel):
     search_budget_used: int = Field(
         default=0,
         ge=0,
-        description="Number of Lean tactic attempts consumed by the search.",
+        description=(
+            "Algorithm-specific search budget consumed: Lean tactic attempts "
+            "for tree search, or whole-proof verification attempts for direct "
+            "search."
+        ),
     )
     diagnostics: dict[str, float | int | str] = Field(
         default_factory=dict,
