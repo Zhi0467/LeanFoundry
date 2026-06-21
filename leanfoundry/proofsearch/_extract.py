@@ -93,7 +93,9 @@ def _render_lean_with_proofs(
         return rendered
     if len(proof_scripts) == 1:
         return _append_single_proof(theorem, proof_scripts[0])
-    raise ValueError("initial Lean block has no sorry placeholders")
+    raise UnsupportedProofExtraction(
+        "initial Lean block has no sorry placeholders to render into"
+    )
 
 
 def _replace_first_sorry(code: str, proof_script: str) -> tuple[str, bool]:
@@ -133,7 +135,7 @@ def _line_indent_before(code: str, position: int) -> str:
         if character in {" ", "\t"}:
             indent_chars.append(character)
         else:
-            return ""
+            return " " * (position - line_start)
     return "".join(indent_chars)
 
 

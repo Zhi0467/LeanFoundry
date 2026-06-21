@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from leanfoundry.proofsearch._tree import (
     ActionNodeStatus,
@@ -295,7 +296,7 @@ def _value_label(
     node: StateNode | TacticNode,
     context: ExtractionContext,
     *,
-    label: int,
+    label: Literal[0, 1],
     weight: float,
     disproved: bool,
 ) -> ValueLabel:

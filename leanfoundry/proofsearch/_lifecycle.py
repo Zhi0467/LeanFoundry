@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
 
-from lean_client.exec_models import ExecCancelResponse, ExecCleanupResponse
+from lean_client.exec_models import ExecCancelResponse
 
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.proofsearch.base import SearchAttemptContext
@@ -34,31 +33,45 @@ async def cleanup_search_state(
     env_backend: EnvBackend,
     context: SearchAttemptContext,
 ) -> CleanupReport:
-    """Clean backend search state with bounded deferred retries."""
+    """Clean backend search state, retrying items the backend defers.
+
+    ``/exec/cleanup`` returns one ``ExecCleanupResult`` per item; an item whose
+    states are still in flight comes back with ``status == "deferred"`` instead
+    of deleted. Those item ids are resubmitted, with bounded attempts and
+    backoff, until the backend drains and deletes them.
+    """
 
     if context.search_item_id is None:
         return CleanupReport(attempts=0, deleted=0, deferred=0)
 
     item_ids = [context.search_item_id]
-    last_response: ExecCleanupResponse | None = None
+    deleted_total = 0
     for attempt_index in range(context.cleanup_max_attempts):
-        last_response = await env_backend.cleanup(item_ids)
-        deferred = _response_items(last_response, "deferred")
-        if not deferred:
+        response = await env_backend.cleanup(item_ids)
+        deleted_total += sum(
+            1
+            for result in response.deleted_items
+            if result.status == "deleted"
+        )
+        deferred_item_ids = [
+            result.item_id
+            for result in response.deleted_items
+            if result.status == "deferred"
+        ]
+        if not deferred_item_ids:
             return CleanupReport(
                 attempts=attempt_index + 1,
-                deleted=_response_count(last_response, "deleted"),
+                deleted=deleted_total,
                 deferred=0,
             )
-        item_ids = deferred
+        item_ids = deferred_item_ids
         if attempt_index + 1 < context.cleanup_max_attempts:
             await _sleep(context.cleanup_backoff_seconds)
 
-    assert last_response is not None
     return CleanupReport(
         attempts=context.cleanup_max_attempts,
-        deleted=_response_count(last_response, "deleted"),
-        deferred=_response_count(last_response, "deferred"),
+        deleted=deleted_total,
+        deferred=len(item_ids),
     )
 
 
@@ -76,35 +89,6 @@ async def cancel_search_state(
 async def _sleep(seconds: float) -> None:
     if seconds > 0:
         await asyncio.sleep(seconds)
-
-
-def _response_items(response: object, field_name: str) -> list[str]:
-    value = getattr(response, field_name, None)
-    if value is None:
-        return []
-    if isinstance(value, dict):
-        return [str(key) for key in value]
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [str(item) for item in value]
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, bool):
-        return []
-    return []
-
-
-def _response_count(response: object, field_name: str) -> int:
-    value: Any = getattr(response, field_name, None)
-    if value is None:
-        return 0
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    try:
-        return len(value)
-    except TypeError:
-        return 1
 
 
 __all__ = [

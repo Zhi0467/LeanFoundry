@@ -167,6 +167,38 @@ class SearchTree:
         self.refresh_from_state(child)
         return child
 
+    def add_child_states(
+        self,
+        parent_action: ActionNode,
+        states: list[tuple[FactorizedProofState, tuple[int, ...] | None]],
+    ) -> list[StateNode]:
+        """Attach several child OR states under one action.
+
+        Status is refreshed once, after every child is attached, so the action
+        is never declared closed from only a prefix of its children. Attaching
+        an already-closed child one at a time would otherwise flip the action
+        to PROVED (terminal) before its open siblings are attached.
+        """
+
+        if parent_action.is_terminal:
+            raise ValueError("cannot add child state to a terminal action")
+        children: list[StateNode] = []
+        for state, focus in states:
+            child = StateNode(
+                node_id=f"{self.search_id}:{self._next_state_index}",
+                state=state,
+                depth=parent_action.parent_state.depth + 1,
+                focus=focus,
+                parent_action=parent_action,
+            )
+            self._next_state_index += 1
+            parent_action.children.append(child)
+            if child.open_goal_count == 0:
+                child.status = StateNodeStatus.PROVED
+            children.append(child)
+        self.refresh_from_action(parent_action)
+        return children
+
     def mark_action_proved(self, action: ActionNode) -> None:
         """Mark an action as closing its parent state."""
 

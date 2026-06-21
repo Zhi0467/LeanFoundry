@@ -71,12 +71,15 @@ async def initialize_search_tree(
         SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
         prior=1.0,
     )
-    for state_info in item.states:
-        tree.add_child_state(
+    if item.states:
+        tree.add_child_states(
             synthetic_initialization_action,
-            _state_info_to_proof_state(theorem, state_info),
+            [
+                (_state_info_to_proof_state(theorem, state_info), None)
+                for state_info in item.states
+            ],
         )
-    if not item.states:
+    else:
         tree.mark_action_proved(synthetic_initialization_action)
     return InitializedSearchTree(tree=tree, initial_code=initial_code)
 

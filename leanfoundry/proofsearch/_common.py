@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from uuid import uuid4
 
 from lean_client.exec_models import ExecMessage
@@ -51,7 +52,7 @@ def result_with_attempt_context(
     result: SearchResult,
     context: SearchAttemptContext,
     *,
-    diagnostics: dict[str, float | int | str] | None = None,
+    diagnostics: Mapping[str, float | int | str] | None = None,
 ) -> SearchResult:
     """Attach runner-owned attempt identity to a search result."""
 

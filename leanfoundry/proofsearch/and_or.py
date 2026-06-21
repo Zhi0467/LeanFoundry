@@ -153,7 +153,7 @@ class AndOrSearchEngine(SearchEngine):
             if tree.root.status is StateNodeStatus.PROVED:
                 try:
                     proof_tree = extract_proof_tree(tree, theorem)
-                except UnsupportedProofExtraction as error:
+                except (UnsupportedProofExtraction, ValueError) as error:
                     return await finish(
                         SearchResult(
                             theorem_id=theorem.id,

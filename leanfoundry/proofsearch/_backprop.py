@@ -74,10 +74,12 @@ def _refresh_action_value(action: ActionNode) -> None:
         action.value_estimate = 0.0
         return
     child_values = [_state_value(child) for child in action.children]
-    if not child_values or any(value is None for value in child_values):
+    if not child_values:
         return
     product = 1.0
     for value in child_values:
+        if value is None:
+            return
         product *= value
     action.value_estimate = product
 

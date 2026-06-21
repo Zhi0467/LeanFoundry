@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
 from lean_client.exec_models import (
+    ExecCancelResponse,
+    ExecCancelResult,
+    ExecCleanupResponse,
+    ExecCleanupResult,
     ExecCreateStatesResponse,
     ExecCreateStatesResult,
     ExecGoalInfo,
@@ -184,17 +187,22 @@ class FakeEnvBackend:
             theorem_name=theorem_name,
         )
 
-    async def cleanup(self, item_ids: list[str]) -> object:
+    async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
         self.cleanup_calls.append(item_ids)
         self.events.append(("cleanup", ",".join(item_ids)))
         if self.cleanup_results:
             return self.cleanup_results.pop(0)
         return cleanup_response(deleted=item_ids)
 
-    async def cancel(self, item_ids: list[str]) -> object:
+    async def cancel(self, item_ids: list[str]) -> ExecCancelResponse:
         self.cancel_calls.append(item_ids)
         self.events.append(("cancel", ",".join(item_ids)))
-        return SimpleNamespace(cancelled=item_ids, status="cancelled")
+        return ExecCancelResponse(
+            items=[
+                ExecCancelResult(item_id=item_id, status="drained")
+                for item_id in item_ids
+            ]
+        )
 
     async def stats(self) -> object:
         return object()
@@ -232,8 +240,27 @@ def cleanup_response(
     *,
     deleted: list[str] | None = None,
     deferred: list[str] | None = None,
-) -> object:
-    return SimpleNamespace(deleted=deleted or [], deferred=deferred or [])
+) -> ExecCleanupResponse:
+    items = [
+        ExecCleanupResult(
+            item_id=item_id,
+            status="deleted",
+            deleted_states=1,
+            deleted_bytes=1,
+        )
+        for item_id in (deleted or [])
+    ]
+    items += [
+        ExecCleanupResult(
+            item_id=item_id,
+            status="deferred",
+            reason="in_flight",
+            deleted_states=0,
+            deleted_bytes=0,
+        )
+        for item_id in (deferred or [])
+    ]
+    return ExecCleanupResponse(deleted_items=items)
 
 
 def root_state(token: str = "root-token") -> ExecStateInfo:

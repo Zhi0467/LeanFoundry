@@ -166,3 +166,38 @@ Validation for this slice:
 - `uv run --no-dev --with pytest pytest ...` is blocked in this workspace
   because the editable dependency
   `../kimina-lean-server/packages/lean-client` is missing.
+
+## 2026-06-22 — Audit fixes for the lifecycle/artifacts slice
+
+A multi-agent review of the point 1-4 work surfaced correctness bugs the slice
+tests masked. Root cause: the full suite was not runnable in the authoring
+workspace, so green came from `py_compile`, not pytest, and the backend-facing
+paths were tested against fabricated response shapes.
+
+- `cleanup_search_state` read `response.deferred` / `response.deleted`, neither
+  of which exists on `ExecCleanupResponse` (`deleted_items:
+  list[ExecCleanupResult]`, per-item `status`). Against the real backend the
+  deferred-retry never fired and `cleanup_deleted` was always `0`. Rewrote it to
+  iterate the typed model (`status == "deferred"` retried, `status == "deleted"`
+  counted) and removed the `getattr` reflection helpers. The cleanup/cancel test
+  fakes returned fabricated `SimpleNamespace` shapes that hid this; they now
+  return real `ExecCleanupResponse` / `ExecCancelResponse`.
+- `initialize_search_tree` attached initial states one at a time, so an
+  already-closed hole arriving before an open one flipped the synthetic action
+  to terminal mid-loop (uncaught `ValueError`). Added
+  `SearchTree.add_child_states` (attach all, refresh once) and used it.
+- Proved-tree extraction could raise a bare `ValueError` (lexer miss, zero-goal
+  state) and crash the attempt; the engine now degrades any extraction failure
+  to a clean `ERROR` result, and `_render_lean_with_proofs` raises
+  `UnsupportedProofExtraction`.
+- `_line_indent_before` returned `""` for a `sorry` preceded by a bullet/tactic,
+  de-indenting multi-line scripts to column 0; it now uses the sorry's column.
+- Fixed the three `mypy` errors the slice introduced (`label: Literal[0, 1]`,
+  `Mapping` diagnostics, `_refresh_action_value` None-narrowing).
+
+Validation: `uv run --no-dev --with pytest pytest` -> 63 passed; `flake8` clean;
+`mypy` clean on the touched modules; `git diff --check` clean.
+
+Deferred (unreachable in v0, belongs to later slices): the DISPROVED extraction
+branch labels the wrong state and would report `EXHAUSTED` (negation slice); the
+driver's `asyncio.gather` has no per-theorem isolation (runner slice).
