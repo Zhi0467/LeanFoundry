@@ -130,9 +130,90 @@ traces, or profiling justify them:
 Backend per-request timeouts belong to the `/exec` request/config layer, not to
 tree-search semantics.
 
+## Holistic Design Completion Map
+
+This map is the high-level path from the design doc to an implementation plan.
+Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
+
+1. Make the core verifiable and backend-neutral.
+   - Restore a runnable local dependency path or pin for `lean-client` so tests
+     and lint can run in a clean checkout.
+   - Tighten env-profile contracts before relying on any generated data:
+     replace ambiguous defaults, validate profile/header identity, and make
+     every theorem/artifact carry the selected profile consistently.
+   - Strengthen SQL/Pydantic consistency tests beyond column names: nullability,
+     defaults, checks, and type affinity must match the strict Pydantic source
+     of truth.
+   - Remove backend-specific names from durable schemas before migrations are
+     treated as stable public API.
+
+2. Finish the durable single-machine spine.
+   - Implement a concrete SQLite `ReplayStore` over the existing migration.
+   - Add artifact-to-store writers for finished proofs, trajectories, value
+     labels, extraction failures, and eval manifests.
+   - Keep live search-tree checkpointing deferred until replay/resume is
+     explicitly designed; persist solved projections and scalar attempt records
+     first.
+
+3. Settle current search semantics before adding graph search.
+   - Decide whether v0 selection is local root-to-leaf PUCT plus current
+     hardest-child heuristic, or whether to implement the design's global-UCB /
+     LCB hardest-child semantics.
+   - Add a policy-context contract for tactic history and inline comment memory;
+     current `PolicyClient.sample_tactics(...)` receives only state objects.
+   - Split direct search serving from pass@k evaluation: `SearchEngine.search`
+     may stop at first proof, but eval needs all-attempt verification and
+     pass@k artifacts.
+   - Keep graph/MCGS behind the state-identity gate. The implemented baseline is
+     AND/OR tree search.
+
+4. Complete extraction and rendering before treating search output as training
+   data.
+   - Finish lifecycle residuals, node-local value effort, `DISPROVED` status and
+     label semantics, multiple-proved-action handling, node-general HER, failure
+     classification, and renderer diagnostics.
+   - Broaden proof rendering only with real Lean fixtures and oracle checks; the
+     current renderer is intentionally narrow and fail-closed.
+
+5. Build the infra-owned eval and adapter surface.
+   - Implement fixed-model eval runners, benchmark loaders, pass@k,
+     solved@budget curves, eval artifact writing, and throughput metrics.
+   - Update design/API docs to match current `PolicyClient` / `ValueClient`
+     separation and `run_search_batch(...)` signature.
+   - Keep Slime, SGLang, Megatron, model choice, W&B, optimizer, and stage
+     configs as training-repo responsibilities. LeanFoundry owns protocols and
+     stable artifacts, not the recipe.
+
+6. Treat extensions as gated work, not hidden core requirements.
+   - Extension A starts after the single-machine spine is measured and replay is
+     durable; it needs router/state-portability/replay-store adapter work, not
+     just URL changes.
+   - Extension B starts after core contamination rules and eval splits are
+     stable; current code has staging schemas only.
+   - Extension C / TTT starts after HER, adapter reload semantics, and
+     per-problem trace persistence exist.
+   - Extension D starts after Stage 1-style baselines and eval harnesses exist;
+     it needs frozen-curriculum, budget-ledger, per-arm storage, and crossed
+     eval infrastructure.
+
 ## Active Next Work
 
-1. Lifecycle hardening
+1. Core design/code alignment
+   - Fix the local `lean-client` dependency story so `uv run --no-dev --with
+     pytest pytest`, `flake8`, and `mypy` are runnable from this checkout or
+     clearly documented as requiring a sibling backend checkout.
+   - Replace ambiguous env-profile defaults with an explicit pinned profile or a
+     required configuration path; validate header/hash/profile identity at data
+     ingress.
+   - Expand schema consistency tests to cover nullability, defaults, checks, and
+     type affinity, not just column names.
+   - Rename durable backend-specific fields such as `verified_by_kimina` before
+     the initial migration is treated as stable.
+   - Update the design doc in a separate pass for stale G1-G4, §2.8 `/verify`,
+     §4 store examples, §10 `lean_client` boundary, §3.6 supported algorithms,
+     Part II training scope, and extension status wording.
+
+2. Lifecycle hardening
    - Per-theorem failure isolation and best-effort cleanup/cancel that never
      mask the primary outcome have landed (see implementation-log). Remaining:
    - Track all active backend item ids per attempt, not only the static
@@ -159,7 +240,21 @@ tree-search semantics.
      `verify_item_id` values before launching concurrent attempts, with a test
      proving duplicate ids fail before any backend call.
 
-2. Extraction and training-artifact hardening
+3. Search semantics and policy context
+   - Decide whether to keep current local root-to-leaf PUCT/hardest-child
+     selection as the v0 contract, or implement the design's global highest-UCB
+     action plus lower-confidence-bound hardest-child semantics.
+   - Add a prompt/history contract so tactic history and inline comments can
+     reach `PolicyClient.sample_tactics(...)` without stuffing stale history into
+     `FactorizedProofState`.
+   - Add a direct pass@k eval path that verifies all candidates and emits
+     pass@k artifacts; keep the direct search engine's first-success behavior
+     only if it is explicitly scoped to search, not evaluation.
+   - Reconcile best-first design text with implementation: either add
+     policy-logprob/depth/novelty inputs or document the current
+     value/missing-score/goal-count/visit heuristic.
+
+4. Extraction and training-artifact hardening
    - Fix `DISPROVED` artifact semantics before enabling `try_negation`. The
      branch already labels the real initial state (not the synthetic root), so
      the two real gaps are: (1) a disproved root falls through to the top-level
@@ -190,7 +285,7 @@ tree-search semantics.
      rendering failures, so root runtime status, search budget, proved action
      count, and proved alternatives remain visible.
 
-3. Richer proof rendering
+5. Richer proof rendering
    - Current extraction emits a canonical proof candidate and explicit
      `TrainingArtifacts`; `extract_proof_tree(...)` remains a narrow renderer
      used before final `/exec/verify`.
@@ -224,27 +319,49 @@ tree-search semantics.
      `state_token` and checks it reaches the recorded child focus/state for at
      least one independent split and one coupled-group case.
 
-4. Real policy/value adapters
+6. Durable replay and eval spine
+   - Implement concrete SQLite `ReplayStore` and write finished search artifacts
+     into the durable tables as attempts land.
+   - Add conversion from `TrainingArtifacts` to durable theorem/proof,
+     trajectory, value-label, and failure records, preserving env profile,
+     attempt ids, verifier status, and model version.
+   - Implement infra-owned eval runners: direct pass@k, self-correct pass@k,
+     tree-search solved@budget, artifact manifests, and throughput metrics.
+   - Add benchmark loaders only after env-profile compatibility and
+     contamination rules are explicit for each benchmark.
+
+7. Real policy/value adapters
    - Add concrete `PolicyClient` / `ValueClient` adapters behind the existing
      protocols.
    - Keep Slime/SGLang specifics behind the adapter boundary.
+   - Update design examples so `PolicyClient`, `ValueClient`, and
+     `run_search_batch(...)` match current public signatures.
 
-5. Bonded value mode and labels
+8. Bonded value mode and labels
    - Add the bonded `wrap(policy_client) -> value_client` factory when the model
      side is ready.
    - Emit `state_value_labels` only when LeanFoundry owns bonded labels.
    - Keep unbonded value clients label-free.
 
-6. Negation pruning
+9. Negation pruning
    - Implement `try_negation` as a provenance-gated search behavior.
    - Synthetic negation attempts must count against `max_tactic_calls`.
    - Disproved labels are full-weight zero labels.
 
-7. Durable results and resume
-   - Ensure finished trajectories/proofs are written to SQLite as they land.
-   - Defer partial search-tree checkpointing until per-theorem budgets are large
-     enough that losing in-flight compute hurts.
-
-8. Graph/MCGS
+10. Graph/MCGS
    - Deferred until a complete state-identity fingerprint exists.
    - Do not optimize for graph merging before proving the tree path.
+
+11. Training-repo and extension handoff
+   - Keep hardware/model/Slime/Megatron/SGLang/stage-config work in the training
+     repo; LeanFoundry should expose protocols, durable artifacts, and eval
+     manifests those workflows consume.
+   - Extension A needs router adapter, state portability, distributed cleanup,
+     and Postgres/Redis replay work after single-machine replay is solid.
+   - Extension B needs formalizer draft/retry, statement verification, semantic
+     judge, dedup, promotion, and difficulty-estimation workflows after core
+     contamination rules are stable.
+   - Extension C / TTT needs node-general HER, adapter reload semantics, and
+     per-problem trace persistence before implementation.
+   - Extension D needs frozen-curriculum materialization, per-arm stores,
+     budget-ledger plumbing, and crossed-eval wrappers.
