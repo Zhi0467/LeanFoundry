@@ -147,18 +147,24 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
    - Remove backend-specific names from durable schemas before migrations are
      treated as stable public API.
 
-2. Finish the durable single-machine spine.
+2. Finish the minimal durable and evaluable single-machine spine.
    - Implement a concrete SQLite `ReplayStore` over the existing migration.
+   - Decide the artifact persistence shape before writing code: tables vs
+     artifact files, deterministic ids, content hashes, search-attempt records,
+     extraction failures, cleanup outbox rows, and eval manifests.
    - Add artifact-to-store writers for finished proofs, trajectories, value
      labels, extraction failures, and eval manifests.
+   - Add the fixed-model eval path needed to measure the baseline: direct
+     pass@k, self-correct pass@k, tree-search solved@budget, and throughput
+     artifact writing.
    - Keep live search-tree checkpointing deferred until replay/resume is
      explicitly designed; persist solved projections and scalar attempt records
      first.
 
 3. Settle current search semantics before adding graph search.
-   - Decide whether v0 selection is local root-to-leaf PUCT plus current
-     hardest-child heuristic, or whether to implement the design's global-UCB /
-     LCB hardest-child semantics.
+   - Make current local root-to-leaf PUCT plus current hardest-child heuristic
+     the v0 baseline contract, and explicitly defer global-UCB / LCB
+     hardest-child semantics to later algorithm work.
    - Add a policy-context contract for tactic history and inline comment memory;
      current `PolicyClient.sample_tactics(...)` receives only state objects.
    - Split direct search serving from pass@k evaluation: `SearchEngine.search`
@@ -175,9 +181,9 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
    - Broaden proof rendering only with real Lean fixtures and oracle checks; the
      current renderer is intentionally narrow and fail-closed.
 
-5. Build the infra-owned eval and adapter surface.
-   - Implement fixed-model eval runners, benchmark loaders, pass@k,
-     solved@budget curves, eval artifact writing, and throughput metrics.
+5. Build the infra-owned adapter surface after the persistent/evaluable loop.
+   - Add a generic reference `PolicyClient` / `ValueClient` adapter only after
+     the policy-context contract is stable.
    - Update design/API docs to match current `PolicyClient` / `ValueClient`
      separation and `run_search_batch(...)` signature.
    - Keep Slime, SGLang, Megatron, model choice, W&B, optimizer, and stage
@@ -232,29 +238,42 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
      `cleanup_attempts=cleanup_max_attempts` even when cleanup failed on the
      first call; report actual attempted calls or add a distinct field for
      planned retry capacity.
-   - Add a durable deferred-cleanup outbox or attempt-lifecycle table for item
-     ids still `deferred` after bounded retries. Track retry count, last
-     status/error, next retry time, and whether the item is search-state or
-     verifier work.
    - Reject duplicate runner-provided `attempt_id`, `search_item_id`, and
      `verify_item_id` values before launching concurrent attempts, with a test
      proving duplicate ids fail before any backend call.
 
-3. Search semantics and policy context
-   - Decide whether to keep current local root-to-leaf PUCT/hardest-child
-     selection as the v0 contract, or implement the design's global highest-UCB
-     action plus lower-confidence-bound hardest-child semantics.
+3. Durable replay and eval spine
+   - Decide the durable artifact shape before implementing writers: which data
+     belongs in SQLite tables vs artifact files, deterministic id strategy,
+     content hashes, failure persistence, and migration compatibility.
+   - Implement concrete SQLite `ReplayStore` and write finished search artifacts
+     into the durable tables as attempts land.
+   - Add conversion from `TrainingArtifacts` to durable theorem/proof,
+     trajectory, value-label, and failure records, preserving env profile,
+     attempt ids, verifier status, and model version.
+   - Add a durable deferred-cleanup outbox or attempt-lifecycle table for item
+     ids still `deferred` after bounded retries. Track retry count, last
+     status/error, next retry time, and whether the item is search-state or
+     verifier work.
+   - Implement infra-owned eval runners: direct pass@k, self-correct pass@k,
+     tree-search solved@budget, artifact manifests, and throughput metrics.
+   - Add benchmark/env-profile manifests before benchmark loaders: source,
+     split, env profile, compatibility status, contamination policy, and fixed
+     held-out assignment must be explicit.
+
+4. Search semantics and policy context
+   - Make current local root-to-leaf PUCT/hardest-child selection the v0
+     baseline contract in design/API docs, and defer global highest-UCB action
+     plus lower-confidence-bound hardest-child semantics to later algorithm
+     work.
    - Add a prompt/history contract so tactic history and inline comments can
      reach `PolicyClient.sample_tactics(...)` without stuffing stale history into
      `FactorizedProofState`.
-   - Add a direct pass@k eval path that verifies all candidates and emits
-     pass@k artifacts; keep the direct search engine's first-success behavior
-     only if it is explicitly scoped to search, not evaluation.
    - Reconcile best-first design text with implementation: either add
      policy-logprob/depth/novelty inputs or document the current
      value/missing-score/goal-count/visit heuristic.
 
-4. Extraction and training-artifact hardening
+5. Extraction and training-artifact hardening
    - Fix `DISPROVED` artifact semantics before enabling `try_negation`. The
      branch already labels the real initial state (not the synthetic root), so
      the two real gaps are: (1) a disproved root falls through to the top-level
@@ -285,14 +304,20 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
      rendering failures, so root runtime status, search budget, proved action
      count, and proved alternatives remain visible.
 
-5. Richer proof rendering
+6. Richer proof rendering
    - Current extraction emits a canonical proof candidate and explicit
      `TrainingArtifacts`; `extract_proof_tree(...)` remains a narrow renderer
      used before final `/exec/verify`.
+   - Treat the current fail-closed renderer plus final `/exec/verify` as
+     acceptable for the first persistent/evaluable tree baseline; do not broaden
+     rendering ahead of the replay/eval spine.
    - Decide the source of truth before broadening rendering. Either LeanFoundry
      reconstructs surface focusing from the tree, or the backend returns tactic
      scripts/proof terms and LeanFoundry assembles backend-provided pieces.
      `/exec/verify` stays the acceptance gate either way.
+   - Resolve the missing identity contract first: `GoalComponent` currently has
+     order/name, not a stable goal identity that can safely reconstruct
+     arbitrary focused groups in surface Lean.
    - If LeanFoundry renders, render by goal identity, mirroring how search
      focuses. Search focuses arbitrary goal subsets through `goal.continue`;
      surface Lean has no primitive for focusing an arbitrary, possibly
@@ -319,21 +344,11 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
      `state_token` and checks it reaches the recorded child focus/state for at
      least one independent split and one coupled-group case.
 
-6. Durable replay and eval spine
-   - Implement concrete SQLite `ReplayStore` and write finished search artifacts
-     into the durable tables as attempts land.
-   - Add conversion from `TrainingArtifacts` to durable theorem/proof,
-     trajectory, value-label, and failure records, preserving env profile,
-     attempt ids, verifier status, and model version.
-   - Implement infra-owned eval runners: direct pass@k, self-correct pass@k,
-     tree-search solved@budget, artifact manifests, and throughput metrics.
-   - Add benchmark loaders only after env-profile compatibility and
-     contamination rules are explicit for each benchmark.
-
 7. Real policy/value adapters
-   - Add concrete `PolicyClient` / `ValueClient` adapters behind the existing
-     protocols.
-   - Keep Slime/SGLang specifics behind the adapter boundary.
+   - Add generic reference `PolicyClient` / `ValueClient` adapters behind the
+     existing protocols only after the policy-context contract is stable.
+   - Keep Slime/SGLang/Megatron specifics in the training repo; the local
+     `SlimeAdapter` remains a deferred boundary placeholder.
    - Update design examples so `PolicyClient`, `ValueClient`, and
      `run_search_batch(...)` match current public signatures.
 
@@ -344,13 +359,21 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
    - Keep unbonded value clients label-free.
 
 9. Negation pruning
-   - Implement `try_negation` as a provenance-gated search behavior.
-   - Synthetic negation attempts must count against `max_tactic_calls`.
-   - Disproved labels are full-weight zero labels.
+   - Keep runtime negation search deferred until autoformalized/decomposition
+     work starts or Stage 3 traces show enough false-goal budget waste to justify
+     it.
+   - Preparatory work remains current: fix root/internal `DISPROVED` status and
+     value-label semantics, and add trace metrics needed to evaluate R4.
+   - When implemented, `try_negation` must be provenance-gated, count synthetic
+     negation attempts against `max_tactic_calls`, and emit full-weight
+     disproved zero labels.
 
-10. Graph/MCGS
+10. Algorithm deferrals
+   - Tactic beam and optimistic/RMaxTS are enum/design-family entries only; keep
+     them off the core path until replay/eval proves the direct/tree/best-first
+     baseline.
    - Deferred until a complete state-identity fingerprint exists.
-   - Do not optimize for graph merging before proving the tree path.
+   - Do not optimize for graph/MCGS merging before proving the AND/OR tree path.
 
 11. Training-repo and extension handoff
    - Keep hardware/model/Slime/Megatron/SGLang/stage-config work in the training

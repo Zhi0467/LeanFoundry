@@ -12,6 +12,55 @@ checked against the current codebase by local review and four read-only
 subagent audits covering infrastructure/data, search, training/eval boundary,
 and extensions.
 
+### Coverage Matrix
+
+Status values:
+- `current`: design matches the current repo surface.
+- `stale`: design text conflicts with current repo decisions.
+- `future-only`: design is intentionally deferred roadmap.
+- `needs-code`: design is current, but code is missing or incomplete.
+- `needs-design`: code/repo decision exists, but design text needs updating.
+- `needs-both`: both code and design need reconciliation.
+- `training-repo`: belongs primarily to the separate training consumer.
+- `external-stale-risk`: external facts may have changed and need fresh source
+  verification before publication claims.
+
+| Design section | Status | Evidence checked | Issue refs | Missing coverage / action |
+|---|---|---|---|---|
+| Project branding | current | `README.md`, `AGENTS.md`, package layout | - | Keep as infrastructure identity; no code issue found. |
+| Open Questions / Concerns | stale / needs-both | schemas, proofsearch extraction/rendering, provenance | #6, #16-#18 | Remove resolved G1-G4 text; keep HER/rendering/policy-context/negation residuals. |
+| System Landscape | external-stale-risk | local docs only | #29 | External system claims need web/source refresh before public-facing publication. |
+| Extensions and Roadmap | needs-design | package layout, extension code absence | #25-#28 | Mark core vs extension gates more sharply; avoid implying extension components exist. |
+| System Architecture | needs-both | module layout, replay/eval/rl_engine protocols | #5, #19, #23, #25, #30 | Single-machine diagram includes trainer/inference/data/eval pieces that are mostly protocols or training-repo work. |
+| Design Principles | needs-both | current code and trackers | #2, #5, #23, #30 | P3/P10 durable spine/preemptibility are design goals, not implemented guarantees. |
+| §1 Environment Profiles | needs-code | `EnvBackendConfig`, `EnvProfile`, theorem/artifact schemas | #2 | Replace ambiguous defaults; validate profile/header/hash identity. |
+| §2.1-2.7 Kimina `/exec` backend | needs-both | `EnvBackend` protocol, `KiminaEnvBackend`, missing local `lean-client` | #1, #7, #9, #31 | Client protocol exists; server mode/state store/scheduler behavior are not proven by this checkout. |
+| §2.8 Validation Harness | stale / needs-code | search verification paths, tests | #7, #31 | Use `/exec/verify`; build replay/latency/cache validation harness. |
+| §3.1-3.1.1 State structure / LeanTree | needs-design | `FactorizedProofState`, expansion split logic | #10 | Separate current minimal state schema from future LeanTree/MCGS identity research. |
+| §3.2 AND/OR UCB selection | needs-design | `_selection.py`, runtime-tree tests | #11 | Adopt current local PUCT/hardest-child as v0 or implement global-UCB/LCB later. |
+| §3.3 Expansion | needs-code | `PolicyClient`, `_expansion.py`, action text storage | #12 | Add policy request/history context for tactic history and comments. |
+| §3.4 HER | needs-code | `extract_training_artifacts`, `TrainingSample` schema | #17 | Add node-general subtree extraction and independent reverify. |
+| §3.5 Value data | needs-code | `ValueLabel`, extraction logic, TODO | #17 | Make effort node-local; complete disproved/root/internal semantics. |
+| §3.5.1 Negation pruning | future-only / needs-code | config/provenance helper, expansion path | #16 | Keep default off; wire only after DISPROVED prep and trace evidence. |
+| §3.6 Supported algorithms | stale | `SearchAlgorithm`, `build_engine` | #14, #32 | Mark tactic beam, optimistic/RMaxTS, MCGS, AND/OR MCGS as enum-only/future. |
+| §3.7 Search roadmap | needs-design | implementation log, factory, TODO | #14, #19, #32 | Rebase roadmap around implemented direct/self-correct/tree wedges and deferred algorithms. |
+| §4.1 A-type data | needs-both | `ATypeDataRecord`, SQL migration | #3, #4, #8 | Fix SQL/model nullability and backend-neutral verification naming. |
+| §4.2 B-type data | needs-code | `TheoremRecord`, SQL migration | #2, #3 | Tighten env/split/profile invariants before data ingress. |
+| §4.3 Trajectories/value labels | needs-code | `TrajectoryRecord`, `TrainingArtifacts`, SQL | #5, #8, #17, #33 | Add concrete store/writers and decide failure/eval/cleanup persistence. |
+| §4.4 Formalizer output | future-only / needs-code | staging schema only | #26 | Staging table exists; pipeline/promotion/dedup/judge absent. |
+| §5 Hardware / Qwen / Phase -1 | training-repo | `rl_engine` placeholder, pyproject deps | #20, #24 | Keep hardware/model/profiling in training repo; infra only exposes metrics/artifacts. |
+| §6 Data for each stage | training-repo / needs-code | replay protocol, extraction artifacts | #5, #19, #20 | Stage data recipe is training-repo; infra must provide durable artifacts. |
+| §7 Training pipeline | training-repo / future-only | `rl_engine`, `proofsearch`, replay protocols | #19, #20, #22 | Stage loops not implemented here; keep consumer-facing interfaces stable. |
+| §8 Metrics | needs-code / training-repo | eval protocol, schemas | #23, #24 | Split infra metrics/artifacts from training progression/W&B metrics. |
+| §8.5 Evaluation protocol | needs-code | `EvalRunner`, `EvalArtifactManifest` | #23, #34 | Add benchmark specs, pass@k, solved@budget, contamination checks, artifact writers. |
+| §9 Known risks | needs-design | TODO SearchConfig exclusions, code surface | #24, #35 | Assign each risk to infra vs training; reconcile max-tree/pruning with current config stance. |
+| §10 Repo boundary/release | needs-design | README, AGENTS, policy/env APIs | #4, #9, #20-#22 | Update `lean_client`, policy/value, rollout pseudocode, Docker/dev/versioning claims. |
+| §§11-16 Extension A | future-only / needs-design | no router/store/state-portability code | #25 | Split router, state portability, distributed replay, and migration actions. |
+| §§17-20 Extension B | future-only / needs-code | staging schema | #26 | Formalizer, semantic judge, dedup, promotion, difficulty estimation absent. |
+| §§21-24 Extension C / TTT | future-only / stale | no TTT or reload interfaces | #27 | Do not claim MCGS/HER/reload already exist. |
+| §§25-32 Extension D | future-only | direct/tree/best-first only | #28 | Add frozen curriculum, arms, budget ledger, crossed eval, outcome tracking later. |
+| Appendix A Aristotle reference | needs-design | current search/extraction code | #10-#17, #32 | Mark as reference, not current behavior; explicitly defer global/graph semantics. |
+
 ### Core Verification And Data Spine
 
 1. Test/dev environment is not runnable in this checkout.
@@ -136,6 +185,9 @@ and extensions.
     - Current renderer is verified-gated and fail-closed, but it is still
       positional, has limited real-Lean fixture coverage, and cannot reconstruct
       arbitrary focused goal groups.
+    - Missing design contract: `GoalComponent` currently carries order/name, not
+      a stable goal identity that would let the renderer safely reconstruct
+      arbitrary non-contiguous focused groups.
 
 ### Training, Eval, And Repo Boundary
 
@@ -201,3 +253,50 @@ and extensions.
       crossed-eval wrappers, and S-full MCGS+HER arm.
     - Design lists value AUC/calibration for no-value/no-value-loss arms; clarify
       what value model is evaluated for each arm.
+
+### Additional Coverage Findings
+
+29. System Landscape contains external claims that were not live-verified.
+    - Treat this section as background, not code contract.
+    - Before public release or citation-heavy docs, refresh claims about current
+      open/closed systems and reported results from primary sources.
+
+30. Architecture and principles overstate current implemented modules.
+    - The single-machine diagram includes trainer, inference engine, SQLite data
+      buffer, evaluation, and MCGS search as if they are all runnable pieces.
+    - Current repo has protocols/schemas for replay, eval, and RL integration,
+      but no concrete trainer/inference/replay/eval implementation.
+    - Design principles P3 and P10 should be read as targets: durable data spine
+      and preemptible resume/checkpointing are not implemented guarantees yet.
+
+31. `/exec` server behavior is mostly outside this checkout's evidence surface.
+    - LeanFoundry client protocol and adapter exist, but the local missing
+      `lean-client` checkout prevents verifying server limits, state-store,
+      cleanup/cancel/stats, scheduler, and mode behavior here.
+    - Keep server behavior claims in the design doc tied to backend-side tests or
+      imported lean-client contracts, not inferred from LeanFoundry alone.
+
+32. Tactic beam and optimistic/RMaxTS need explicit deferral.
+    - They appear in the algorithm enum/design family, but no engine
+      implementation exists.
+    - Treat them like graph/MCGS: not on the core path until replay/eval proves
+      the direct/tree/best-first baseline.
+
+33. Durable artifact schema is underspecified.
+    - `ReplayStore` covers theorem, A-type data, trajectory, and value labels,
+      but not search-attempt records, extraction failures, cleanup outbox rows,
+      or eval manifests.
+    - Decide table vs artifact-file storage, deterministic ids, hashes, and
+      failure persistence before implementing writers.
+
+34. Eval needs benchmark/env-profile manifests before loaders.
+    - `EvalArtifactManifest` has a benchmark string, but contamination rules need
+      a concrete benchmark spec/manifest carrying source, split, env profile,
+      compatibility status, and fixed held-out assignment.
+
+35. Risk section has unresolved config tension.
+    - Design risk mitigation proposes max tree size and pruning, while
+      `todo.md` says max tree nodes are not in `SearchConfig` until design,
+      traces, or profiling justify them.
+    - Resolve whether tree memory protection is an operational guard outside
+      `SearchConfig` or a future search budget knob.
