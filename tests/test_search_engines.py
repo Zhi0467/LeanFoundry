@@ -1104,6 +1104,138 @@ def test_tree_engine_does_not_cleanup_before_search_state_exists() -> None:
     assert env.cleanup_calls == []
 
 
+def test_run_search_batch_isolates_one_theorem_failure() -> None:
+    class FlakyPolicyClient(FakePolicyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.proof_calls = 0
+
+        async def sample_proofs(
+            self,
+            prompts,
+            *,
+            n: int,
+            params=None,
+        ) -> list[list[str]]:
+            self.proof_prompts.append(prompts[0])
+            self.proof_calls += 1
+            if self.proof_calls == 1:
+                raise RuntimeError("policy unavailable")
+            return [["theorem t : True := by\n  trivial"]]
+
+    policy = FlakyPolicyClient()
+    env = FakeEnvBackend()
+
+    results = asyncio.run(
+        run_search_batch(
+            [theorem(), theorem()],
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.DIRECT,
+                max_direct_candidates=1,
+            ),
+            max_concurrent=1,
+        )
+    )
+
+    statuses = [result.status for result in results]
+    assert statuses.count(SearchStatus.ERROR) == 1
+    assert statuses.count(SearchStatus.PROVED) == 1
+    error_result = next(
+        result for result in results if result.status is SearchStatus.ERROR
+    )
+    assert error_result.diagnostics["operational_status"] == (
+        "runner_exception"
+    )
+    assert "policy unavailable" in error_result.diagnostics[
+        "failure_message"
+    ]
+    assert error_result.attempt_id is not None
+    assert len(env.verify_calls) == 1
+
+
+def test_tree_engine_cleanup_failure_preserves_proved_result() -> None:
+    class CleanupFailingEnv(FakeEnvBackend):
+        async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
+            self.cleanup_calls.append(item_ids)
+            self.events.append(("cleanup", ",".join(item_ids)))
+            raise RuntimeError("cleanup backend down")
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(tactic_batches=[["trivial"]])
+    env = CleanupFailingEnv(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="trivial", status="complete")],
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("cleanup-fail-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.PROVED
+    assert result.proof_tree is not None
+    assert result.proof_tree.verified
+    assert result.diagnostics["cleanup_failed"] == "cleanup backend down"
+    assert env.cleanup_calls == [["cleanup-fail-attempt:search"]]
+
+
+def test_tree_engine_cleanup_failure_does_not_mask_unexpected_error() -> None:
+    class RaisingPolicyClient(FakePolicyClient):
+        async def sample_tactics(
+            self,
+            states,
+            *,
+            n: int,
+            params=None,
+        ) -> list[list[str]]:
+            raise RuntimeError("policy unavailable")
+
+    class CleanupFailingEnv(FakeEnvBackend):
+        async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
+            self.cleanup_calls.append(item_ids)
+            self.events.append(("cleanup", ",".join(item_ids)))
+            raise RuntimeError("cleanup backend down")
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    env = CleanupFailingEnv(create_states=[root_state()])
+
+    with pytest.raises(RuntimeError, match="policy unavailable"):
+        asyncio.run(
+            engine.search(
+                theorem(),
+                attempt_context=tree_attempt("mask-error-attempt"),
+                policy_client=RaisingPolicyClient(),
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.PUCT_TREE,
+                    max_tactic_calls=1,
+                    tactics_per_expansion=1,
+                ),
+            )
+        )
+
+    assert env.cleanup_calls == [["mask-error-attempt:search"]]
+
+
 def test_run_search_batch_cancel_calls_cancel_then_cleanup() -> None:
     class BlockingStepEnv(FakeEnvBackend):
         def __init__(self) -> None:

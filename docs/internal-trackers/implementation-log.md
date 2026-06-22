@@ -201,3 +201,38 @@ Validation: `uv run --no-dev --with pytest pytest` -> 63 passed; `flake8` clean;
 Deferred (unreachable in v0, belongs to later slices): the DISPROVED extraction
 branch labels the wrong state and would report `EXHAUSTED` (negation slice); the
 driver's `asyncio.gather` has no per-theorem isolation (runner slice).
+
+## 2026-06-22 — Runner isolation and best-effort lifecycle
+
+Pulled the two reachable-today defects out of the lifecycle-hardening TODO after
+re-reading the code; the rest of that section stays future work.
+
+- `run_search_batch(...)` now isolates non-cancellation failures per theorem.
+  `run_one` catches a stray policy/backend exception and returns that theorem's
+  `SearchResult(ERROR, operational_status="runner_exception")` via
+  `_runner_error_result`, instead of letting a bare `asyncio.gather(...)`
+  propagate the first exception and orphan the still-running siblings.
+  `CancelledError` still unwinds the whole gather.
+- Cleanup is now best-effort everywhere it could mask the primary outcome.
+  `cleanup_search_state_best_effort` runs cleanup, returns its diagnostics, and
+  on failure returns a `cleanup_failed` diagnostic instead of raising. The tree
+  engine's `finish(...)` and its outer `except` both use it, so a cleanup
+  transport error can no longer discard an already computed `PROVED` result or
+  mask the original exception. The driver's cancellation path uses
+  `cancel_search_state_best_effort` + `cleanup_search_state_best_effort` so a
+  failed cancel/cleanup cannot replace the propagating `CancelledError`.
+- Reworded the TODO `DISPROVED` item: the branch already labels the real initial
+  state, so the real gaps are the `EXHAUSTED` misreport (a disproved root never
+  yields `SearchStatus.DISPROVED`) and missing disproved-internal-node coverage.
+  Both stay gated behind `try_negation`.
+- Tests: per-theorem isolation (one theorem raises, sibling still proves);
+  cleanup failure preserves a `PROVED` result with a `cleanup_failed`
+  diagnostic; cleanup failure during an unexpected error still propagates the
+  original exception.
+
+Known residual (still in TODO): cancellation covers only `search_item_id`, not
+`verify_item_id`/`verify_item_id:k`, and a cancel failure during unwind is
+swallowed without a runner event.
+
+Validation: `uv run --no-dev --with pytest pytest` -> all pass; `flake8` clean;
+`mypy` clean on the touched modules; `git diff --check` clean.

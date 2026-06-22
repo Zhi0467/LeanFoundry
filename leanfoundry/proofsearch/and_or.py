@@ -19,7 +19,9 @@ from leanfoundry.proofsearch._expansion import (
     BackendProtocolError,
     expand_state,
 )
-from leanfoundry.proofsearch._lifecycle import cleanup_search_state
+from leanfoundry.proofsearch._lifecycle import (
+    cleanup_search_state_best_effort,
+)
 from leanfoundry.proofsearch._extract import (
     UnsupportedProofExtraction,
     extract_proof_tree,
@@ -92,14 +94,14 @@ class AndOrSearchEngine(SearchEngine):
         async def finish(result: SearchResult) -> SearchResult:
             nonlocal cleanup_attempted
             cleanup_attempted = True
-            cleanup_report = await cleanup_search_state(
+            cleanup_diagnostics = await cleanup_search_state_best_effort(
                 env_backend,
                 attempt_context,
             )
             return result_with_attempt_context(
                 result,
                 attempt_context,
-                diagnostics=cleanup_report.diagnostics(),
+                diagnostics=cleanup_diagnostics,
             )
 
         try:
@@ -222,7 +224,10 @@ class AndOrSearchEngine(SearchEngine):
             )
         except Exception:
             if cleanup_needed and not cleanup_attempted:
-                await cleanup_search_state(env_backend, attempt_context)
+                await cleanup_search_state_best_effort(
+                    env_backend,
+                    attempt_context,
+                )
             raise
 
 

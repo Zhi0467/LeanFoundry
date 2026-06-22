@@ -133,22 +133,14 @@ tree-search semantics.
 ## Active Next Work
 
 1. Lifecycle hardening
-   - Make `run_search_batch(...)` isolate non-cancellation failures per
-     theorem. A policy/backend exception from one theorem should become that
-     theorem's `SearchResult(ERROR, diagnostics=...)`, or trigger an explicit
-     all-sibling cancellation policy; do not rely on bare `asyncio.gather(...)`
-     to define runner semantics.
+   - Per-theorem failure isolation and best-effort cleanup/cancel that never
+     mask the primary outcome have landed (see implementation-log). Remaining:
    - Track all active backend item ids per attempt, not only the static
-     `search_item_id`. Cancellation must cover tree search state, tree final
-     `verify_item_id`, and direct candidate verifier ids such as
-     `verify_item_id:k`.
-   - Make cancellation and cleanup best-effort and ordered with `try/finally`:
-     attempt cancel, always attempt cleanup for owned search state, and record
-     cancel/cleanup failures as diagnostics or runner events.
-   - Do not let cleanup failure mask an already computed search result or the
-     original policy/backend exception. Preserve the primary outcome and attach
-     cleanup failure diagnostics; test cleanup raising on proved, exhausted,
-     backend-protocol-error, and unexpected-exception paths.
+     `search_item_id`. Cancellation currently covers only tree search state; it
+     must also cover the tree final `verify_item_id` and direct candidate
+     verifier ids such as `verify_item_id:k`. While unwinding a cancellation
+     there is no result to attach to, so a cancel failure is currently
+     swallowed without a runner event; give it an observable sink.
    - Add a durable deferred-cleanup outbox or attempt-lifecycle table for item
      ids still `deferred` after bounded retries. Track retry count, last
      status/error, next retry time, and whether the item is search-state or
@@ -158,11 +150,15 @@ tree-search semantics.
      proving duplicate ids fail before any backend call.
 
 2. Extraction and training-artifact hardening
-   - Fix `DISPROVED` artifact semantics before enabling `try_negation`: a real
-     initial or internal state marked `DISPROVED` must produce a full-weight
-     `ValueLabel(label=0, disproved=True)` for that original state, not for the
-     synthetic root, and the top-level result must not be reported as plain
-     `EXHAUSTED` when the root outcome is semantic disproof.
+   - Fix `DISPROVED` artifact semantics before enabling `try_negation`. The
+     branch already labels the real initial state (not the synthetic root), so
+     the two real gaps are: (1) a disproved root falls through to the top-level
+     `EXHAUSTED` branch in `and_or.py`, so `SearchStatus.DISPROVED` is never
+     produced even though the enum exists — map a disproved root to a disproved
+     top-level outcome; and (2) the disproved value-label branch scans only the
+     real initial states, so a disproved internal state emits no full-weight
+     `ValueLabel(label=0, disproved=True)` — walk the tree for disproved nodes,
+     not just the initial layer.
    - Make censored-negative effort node-local. Store or compute tactics tried
      below each `StateNode`, and use that value for censored-negative
      eligibility instead of applying the whole attempt budget to every open real

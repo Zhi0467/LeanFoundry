@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from lean_client.exec_models import ExecCancelResponse
@@ -86,6 +87,46 @@ async def cancel_search_state(
     return await env_backend.cancel([context.search_item_id])
 
 
+async def cleanup_search_state_best_effort(
+    env_backend: EnvBackend,
+    context: SearchAttemptContext,
+) -> Mapping[str, int | str]:
+    """Clean owned search state, returning diagnostics and never raising.
+
+    Cleanup is housekeeping. It must never mask an already computed search
+    result or a primary exception, so a failed cleanup is recorded as a
+    ``cleanup_failed`` diagnostic instead of propagating. ``CancelledError``
+    is not swallowed, so cooperative cancellation still unwinds.
+    """
+
+    try:
+        report = await cleanup_search_state(env_backend, context)
+    except Exception as error:
+        return {
+            "cleanup_attempts": context.cleanup_max_attempts,
+            "cleanup_deleted": 0,
+            "cleanup_failed": str(error),
+        }
+    return report.diagnostics()
+
+
+async def cancel_search_state_best_effort(
+    env_backend: EnvBackend,
+    context: SearchAttemptContext,
+) -> None:
+    """Cancel in-flight backend work, never raising on cancel failure.
+
+    Like cleanup, cancellation is best-effort during unwind: a failed cancel
+    must not replace the ``CancelledError`` being propagated. The
+    ``CancelledError`` itself is not swallowed.
+    """
+
+    try:
+        await cancel_search_state(env_backend, context)
+    except Exception:
+        return
+
+
 async def _sleep(seconds: float) -> None:
     if seconds > 0:
         await asyncio.sleep(seconds)
@@ -94,5 +135,7 @@ async def _sleep(seconds: float) -> None:
 __all__ = [
     "CleanupReport",
     "cancel_search_state",
+    "cancel_search_state_best_effort",
     "cleanup_search_state",
+    "cleanup_search_state_best_effort",
 ]
