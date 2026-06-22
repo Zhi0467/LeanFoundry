@@ -141,6 +141,16 @@ tree-search semantics.
      verifier ids such as `verify_item_id:k`. While unwinding a cancellation
      there is no result to attach to, so a cancel failure is currently
      swallowed without a runner event; give it an observable sink.
+   - Preserve cleanup-failure diagnostics on unexpected tree exceptions that
+     are later wrapped by `run_search_batch(...)` as `runner_exception`. The
+     tree engine currently calls best-effort cleanup on the outer exception
+     path, but discards the returned `cleanup_failed` diagnostic before the
+     driver turns the original error into a `SearchResult`.
+   - Make cleanup diagnostics precise on transport/backend exceptions.
+     `cleanup_search_state_best_effort(...)` currently reports
+     `cleanup_attempts=cleanup_max_attempts` even when cleanup failed on the
+     first call; report actual attempted calls or add a distinct field for
+     planned retry capacity.
    - Add a durable deferred-cleanup outbox or attempt-lifecycle table for item
      ids still `deferred` after bounded retries. Track retry count, last
      status/error, next retry time, and whether the item is search-state or

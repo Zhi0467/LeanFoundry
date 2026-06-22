@@ -232,7 +232,12 @@ re-reading the code; the rest of that section stays future work.
 
 Known residual (still in TODO): cancellation covers only `search_item_id`, not
 `verify_item_id`/`verify_item_id:k`, and a cancel failure during unwind is
-swallowed without a runner event.
+swallowed without a runner event. Cleanup failures on the tree engine's
+unexpected-exception path are also swallowed after preserving the primary
+exception, so a later `run_search_batch(...)` `runner_exception` result does not
+carry `cleanup_failed`. Cleanup diagnostics for transport/backend exceptions
+also overstate `cleanup_attempts` as `cleanup_max_attempts` even when cleanup
+failed on the first call.
 
 Validation: `uv run --no-dev --with pytest pytest` -> all pass; `flake8` clean;
 `mypy` clean on the touched modules; `git diff --check` clean.
