@@ -132,7 +132,59 @@ tree-search semantics.
 
 ## Active Next Work
 
-1. Richer proof rendering
+1. Lifecycle hardening
+   - Make `run_search_batch(...)` isolate non-cancellation failures per
+     theorem. A policy/backend exception from one theorem should become that
+     theorem's `SearchResult(ERROR, diagnostics=...)`, or trigger an explicit
+     all-sibling cancellation policy; do not rely on bare `asyncio.gather(...)`
+     to define runner semantics.
+   - Track all active backend item ids per attempt, not only the static
+     `search_item_id`. Cancellation must cover tree search state, tree final
+     `verify_item_id`, and direct candidate verifier ids such as
+     `verify_item_id:k`.
+   - Make cancellation and cleanup best-effort and ordered with `try/finally`:
+     attempt cancel, always attempt cleanup for owned search state, and record
+     cancel/cleanup failures as diagnostics or runner events.
+   - Do not let cleanup failure mask an already computed search result or the
+     original policy/backend exception. Preserve the primary outcome and attach
+     cleanup failure diagnostics; test cleanup raising on proved, exhausted,
+     backend-protocol-error, and unexpected-exception paths.
+   - Add a durable deferred-cleanup outbox or attempt-lifecycle table for item
+     ids still `deferred` after bounded retries. Track retry count, last
+     status/error, next retry time, and whether the item is search-state or
+     verifier work.
+   - Reject duplicate runner-provided `attempt_id`, `search_item_id`, and
+     `verify_item_id` values before launching concurrent attempts, with a test
+     proving duplicate ids fail before any backend call.
+
+2. Extraction and training-artifact hardening
+   - Fix `DISPROVED` artifact semantics before enabling `try_negation`: a real
+     initial or internal state marked `DISPROVED` must produce a full-weight
+     `ValueLabel(label=0, disproved=True)` for that original state, not for the
+     synthetic root, and the top-level result must not be reported as plain
+     `EXHAUSTED` when the root outcome is semantic disproof.
+   - Make censored-negative effort node-local. Store or compute tactics tried
+     below each `StateNode`, and use that value for censored-negative
+     eligibility instead of applying the whole attempt budget to every open real
+     initial state.
+   - Decide and implement multiple-proved-action extraction: either emit every
+     independently rendered and verified proved action as a separate proof
+     candidate with derived policy/value artifacts, or explicitly keep
+     canonical-first-only extraction and record skipped proved alternatives as a
+     non-training diagnostic.
+   - Add node-general HER extraction. Iterate proved subtree roots from the
+     runtime tree, build subtree `TrainingSample` / `ProofTree` candidates,
+     render each candidate, reverify under the same `env_profile`, and emit
+     diagnostics for `her_candidate_multiplier`, `her_verified_multiplier`, and
+     discarded failures.
+   - Split extraction failure kinds in emitted artifacts: use `unsupported` for
+     known unsupported tree shapes, `rendering` for renderer/compiler failures,
+     and `verification` for final `/exec/verify` rejection.
+   - Preserve base extraction diagnostics on all failure envelopes, including
+     rendering failures, so root runtime status, search budget, proved action
+     count, and proved alternatives remain visible.
+
+3. Richer proof rendering
    - Current extraction emits a canonical proof candidate and explicit
      `TrainingArtifacts`; `extract_proof_tree(...)` remains a narrow renderer
      used before final `/exec/verify`.
@@ -150,40 +202,43 @@ tree-search semantics.
    - Render a coupled multi-goal child as one contiguous block over its gathered
      goals; never re-split it internally. This is what replaces the current
      `UnsupportedProofExtraction` guard.
+   - Add a renderer invariant test that counts real `sorry` placeholders in
+     `initial_lean_block`, rejects proof-script/placeholder cardinality
+     mismatch, and fails if an inserted proof consumes a later placeholder.
    - Add real Lean fixtures before changing renderer behavior: linear proof,
-     multiple initial states, constructor bullets, cases/induction with named
-     tags, tagless/inaccessible goals forcing the positional fallback,
-     multi-line and nested-`by` tactic text, contiguous and non-contiguous
-     coupled groups, and coupled multi-goal rejection until identity-based
-     focusing lands.
-   - Optional sharper oracle: re-run each rendered subtree from its parent
-     `state_token` and check it reaches the recorded child state.
+     multiple initial states whose proofs would fail if swapped, constructor
+     bullets, cases/induction with named tags, tagless/inaccessible goals
+     forcing the positional fallback, multi-line and nested-`by` tactic text,
+     model-emitted bullets, contiguous and non-contiguous coupled groups, and
+     coupled multi-goal rejection until identity-based focusing lands.
+   - Keep rejecting split children whose `focus` owns multiple goals until the
+     renderer can reconstruct that exact focused group in surface Lean and the
+     result is verified by a real Lean fixture.
+   - Add an oracle test that re-runs each rendered subtree from its parent
+     `state_token` and checks it reaches the recorded child focus/state for at
+     least one independent split and one coupled-group case.
 
-2. Real policy/value adapters
+4. Real policy/value adapters
    - Add concrete `PolicyClient` / `ValueClient` adapters behind the existing
      protocols.
    - Keep Slime/SGLang specifics behind the adapter boundary.
 
-3. Bonded value mode and labels
+5. Bonded value mode and labels
    - Add the bonded `wrap(policy_client) -> value_client` factory when the model
      side is ready.
    - Emit `state_value_labels` only when LeanFoundry owns bonded labels.
    - Keep unbonded value clients label-free.
 
-4. Negation pruning
+6. Negation pruning
    - Implement `try_negation` as a provenance-gated search behavior.
    - Synthetic negation attempts must count against `max_tactic_calls`.
    - Disproved labels are full-weight zero labels.
 
-5. HER extraction
-   - Extract and re-verify subproofs from solved trees.
-   - Keep HER tree-shaped, not a flat tactic sequence.
-
-6. Durable results and resume
+7. Durable results and resume
    - Ensure finished trajectories/proofs are written to SQLite as they land.
    - Defer partial search-tree checkpointing until per-theorem budgets are large
      enough that losing in-flight compute hurts.
 
-7. Graph/MCGS
+8. Graph/MCGS
    - Deferred until a complete state-identity fingerprint exists.
    - Do not optimize for graph merging before proving the tree path.
