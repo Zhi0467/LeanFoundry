@@ -55,8 +55,9 @@ consumer that plugs in via stable interfaces.
 ## How to work here (maintainer's standing preferences)
 
 - **Read first, reason, don't treat docs as dogma.** Before answering a design
-  question, read `docs/design/` and the actual backend at
-  `../kimina-lean-server/packages/lean-client/`. Reason from first principles.
+  question, read `docs/design/` and the actual `lean-client` package from the
+  GitHub source pinned in `uv.lock` (a local sibling checkout is convenience,
+  not truth). Reason from first principles.
 - **No redundancy, no mirrors, no "just in case" fallbacks.** Crystal clear over
   defensive; minimal over complete.
 - **Explain at the runtime level** — what data flows and what a thing is *for* —

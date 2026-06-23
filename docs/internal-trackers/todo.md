@@ -136,8 +136,8 @@ This map is the high-level path from the design doc to an implementation plan.
 Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
 
 1. Make the core verifiable and backend-neutral.
-   - Restore a runnable local dependency path or pin for `lean-client` so tests
-     and lint can run in a clean checkout.
+   - Keep the remote `lean-client` lock refreshed when the GitHub source
+     changes.
    - Tighten env-profile contracts before relying on any generated data:
      replace ambiguous defaults, validate profile/header identity, and make
      every theorem/artifact carry the selected profile consistently.
@@ -205,9 +205,6 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
 ## Active Next Work
 
 1. Core design/code alignment
-   - Fix the local `lean-client` dependency story so `uv run --no-dev --with
-     pytest pytest`, `flake8`, and `mypy` are runnable from this checkout or
-     clearly documented as requiring a sibling backend checkout.
    - Replace ambiguous env-profile defaults with an explicit pinned profile or a
      required configuration path; validate header/hash/profile identity at data
      ingress.

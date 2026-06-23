@@ -30,6 +30,8 @@ re-deriving context. Keep both concise.
 Inherited global rules still apply: descriptive variable names; `uv` +
 `pyproject.toml` for deps; separate utilities from entry points and public from
 private functions; ask before pushing to GitHub.
+The `lean-client` source of truth is the GitHub source pinned in `uv.lock`;
+local sibling checkouts are only convenience copies.
 
 Operational rules and conversation-derived working preferences belong in
 `AGENTS.md` and this file, not in internal tracker docs. When a discussion

@@ -241,3 +241,26 @@ failed on the first call.
 
 Validation: `uv run --no-dev --with pytest pytest` -> all pass; `flake8` clean;
 `mypy` clean on the touched modules; `git diff --check` clean.
+
+## 2026-06-23: Remote lean-client Source
+
+- Switched the `lean-client` uv source from the sibling local checkout to
+  `https://github.com/Zhi0467/kimina-lean-server.git`, subdirectory
+  `packages/lean-client`, so clean checkouts and CI no longer depend on local
+  repo state.
+- Documented the remote source and lock-refresh command in `README.md`.
+- Added a README section showing how a training repo should depend on
+  LeanFoundry, inject policy/value/backend clients, and avoid importing Lean
+  server internals.
+- Updated CI to check the lockfile and run tests/lint against locked remote
+  sources.
+
+Validation:
+
+- `uv lock --check` passed.
+- `uv sync --group dev --reinstall-package lean-client` rebuilt `lean-client`
+  from the locked GitHub source.
+- `uv run --isolated --locked --no-dev --with pytest pytest` passed: 66 tests.
+- `uv run --isolated --locked --no-dev --with flake8 flake8 leanfoundry tests`
+  passed.
+- `git diff --check` passed.

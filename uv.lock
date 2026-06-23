@@ -251,7 +251,7 @@ wheels = [
 [[package]]
 name = "lean-client"
 version = "0.1.0"
-source = { editable = "../kimina-lean-server/packages/lean-client" }
+source = { git = "https://github.com/Zhi0467/kimina-lean-server.git?subdirectory=packages%2Flean-client&branch=main#7dba5cc11260dcf81b00b36c7a334bd0e34e7cc6" }
 dependencies = [
     { name = "colorama" },
     { name = "httpx" },
@@ -262,21 +262,6 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions", marker = "python_full_version < '3.12'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "colorama", specifier = ">=0.4.6" },
-    { name = "datasets", marker = "extra == 'benchmark'", specifier = ">=4.0.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
-    { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pygments", specifier = ">=2.0.0" },
-    { name = "tabulate", specifier = ">=0.9.0" },
-    { name = "tenacity", specifier = ">=9.1.2" },
-    { name = "tqdm", specifier = ">=4.0.0" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.0.0" },
-]
-provides-extras = ["benchmark"]
 
 [[package]]
 name = "leanfoundry"
@@ -299,7 +284,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "lean-client", editable = "../kimina-lean-server/packages/lean-client" },
+    { name = "lean-client", git = "https://github.com/Zhi0467/kimina-lean-server.git?subdirectory=packages%2Flean-client&branch=main" },
     { name = "pydantic", specifier = ">=2.13.4" },
 ]
 

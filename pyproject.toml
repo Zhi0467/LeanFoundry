@@ -65,4 +65,4 @@ line_length = 88
 known_first_party = ["leanfoundry"]
 
 [tool.uv.sources]
-lean-client = { path = "../kimina-lean-server/packages/lean-client", editable = true }
+lean-client = { git = "https://github.com/Zhi0467/kimina-lean-server.git", subdirectory = "packages/lean-client", branch = "main" }
