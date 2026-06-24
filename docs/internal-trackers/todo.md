@@ -148,12 +148,9 @@ dedup at read time. This durable store is a side archive for eval/HER/offline;
 it is NOT the online RL conduit (Slime owns that, below).
 
 Remaining slices:
-1. Soundness + extraction: reject `sorry`/`admit` at expansion attach-time (dead
-   action, lexer token match); emit policy/value from the proved tree directly
-   (Markovian + `proof_prefix`), decoupled from `/exec/verify`; root-path helper.
-2. Store: concrete SQLite `ReplayStore` + writer + deterministic ids;
+1. Store: concrete SQLite `ReplayStore` + writer + deterministic ids;
    stream-write per attempt.
-3. Wire-up: driver/runner persists artifacts; minimal solved/throughput counts.
+2. Wire-up: driver/runner persists artifacts; minimal solved/throughput counts.
 
 Decisions:
 - Policy target is the single proved `tactic` string (SFT / expert-iteration). A

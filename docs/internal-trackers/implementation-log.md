@@ -333,3 +333,29 @@ Validation:
 
 Validation: `uv run --no-dev --with pytest pytest
 tests/test_schema_database_consistency.py` -> 6 passed.
+
+## 2026-06-24: Path-A soundness and render-free extraction
+
+- Added a shared Lean token scanner for exact tokens outside comments and
+  strings, and used it to mark tactics containing `sorry` or `admit` as DEAD at
+  expansion attach-time. A backend `complete` response for a placeholder tactic
+  can no longer prove a search action.
+- Changed tree-search training extraction to walk the runtime solved tree
+  directly. Positive `PolicyExample` rows now come from the proved action at
+  each runtime state and carry a linear `proof_prefix`; bonded proved
+  `ValueLabel` rows use node-local subtree effort from runtime visits.
+- Decoupled Path-A artifacts from optional whole-proof rendering and
+  verification. Rendering failures and final verifier rejections remain visible
+  in `TrainingArtifacts.failures` and result diagnostics, but they no longer
+  erase per-node policy/value data from a structurally solved tree.
+- Kept whole-proof `ProofTree` artifacts verifier-status-bearing: accepted
+  rendered proofs are proof candidates; rejected rendered proofs are retained on
+  `SearchResult.proof_tree` with `verified=False` and a verification failure.
+
+Validation:
+
+- `uv run --no-dev --with pytest pytest tests/test_expansion.py
+  tests/test_extraction.py tests/test_search_engines.py` -> 42 passed.
+- `uv run --no-dev --with flake8 flake8 leanfoundry/proofsearch
+  tests/test_expansion.py tests/test_extraction.py tests/test_search_engines.py`
+  passed.

@@ -14,6 +14,9 @@ from leanfoundry.proofsearch._budgets import (
     has_tactic_budget,
     step_result_ran_lean,
 )
+from leanfoundry.proofsearch._lean_tokens import (
+    find_forbidden_proof_placeholder_token,
+)
 from leanfoundry.proofsearch._selection import empirical_action_priors
 from leanfoundry.proofsearch._tree import ActionNode, SearchTree, StateNode
 from leanfoundry.proofsearch.base import SearchConfig
@@ -267,6 +270,16 @@ def _attach_step_result(
     prior: float,
 ) -> ActionNode:
     action = tree.add_action(state_node, tactic, prior=prior)
+    forbidden_token = find_forbidden_proof_placeholder_token(tactic)
+    if forbidden_token is not None:
+        tree.mark_action_dead(
+            action,
+            message=(
+                "forbidden proof placeholder token: "
+                f"{forbidden_token}"
+            ),
+        )
+        return action
     if step_result.status == "complete":
         tree.mark_action_proved(action)
         return action

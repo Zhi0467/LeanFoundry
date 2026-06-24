@@ -40,32 +40,21 @@ async def verify_extracted_tree(
         extraction_context.with_verification_status(verification.status),
         proof_tree=verified_tree,
     )
-    if verification.status == "accepted":
-        return SearchResult(
-            theorem_id=theorem.id,
-            status=SearchStatus.PROVED,
-            proof_tree=verified_tree,
-            training_artifacts=artifacts,
-            search_budget_used=tactic_calls_made,
-            diagnostics={"verifier_status": verification.status},
+    diagnostics: dict[str, float | int | str] = {
+        "verifier_status": verification.status
+    }
+    if verification.status != "accepted":
+        diagnostics["verifier_feedback"] = verifier_feedback(
+            verification.status,
+            verification.messages,
         )
-    status = (
-        SearchStatus.CANCELLED
-        if verification.status == "cancelled"
-        else SearchStatus.ERROR
-    )
     return SearchResult(
         theorem_id=theorem.id,
-        status=status,
+        status=SearchStatus.PROVED,
+        proof_tree=verified_tree,
         training_artifacts=artifacts,
         search_budget_used=tactic_calls_made,
-        diagnostics={
-            "verifier_status": verification.status,
-            "verifier_feedback": verifier_feedback(
-                verification.status,
-                verification.messages,
-            ),
-        },
+        diagnostics=diagnostics,
     )
 
 

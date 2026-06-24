@@ -194,6 +194,74 @@ def test_expand_state_calls_policy_and_backend_once() -> None:
     assert tree.root.status is StateNodeStatus.PROVED
 
 
+def test_expand_state_marks_sorry_complete_action_dead() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(["sorry"])
+    backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[ExecStepResult(tactic="sorry", status="complete")],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=backend,
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=1),
+        )
+    )
+
+    action = outcome.actions[0]
+    assert outcome.tactic_calls_used == 1
+    assert action.status is ActionNodeStatus.DEAD
+    assert action.failure_message == "forbidden proof placeholder token: sorry"
+    assert tree.root.status is StateNodeStatus.OPEN
+
+
+def test_expand_state_rejects_admit_but_ignores_comments_and_strings() -> None:
+    tree = SearchTree.create("search", make_state())
+    policy = FakePolicyClient(
+        [
+            "admit",
+            "-- admit in a comment\ntrivial",
+            "have s : String := \"sorry\"\ntrivial",
+        ]
+    )
+    backend = FakeEnvBackend(
+        ExecStepBatchResult(
+            node_id=tree.root.node_id,
+            results=[
+                ExecStepResult(tactic="admit", status="complete"),
+                ExecStepResult(tactic="trivial", status="complete"),
+                ExecStepResult(tactic="trivial", status="complete"),
+            ],
+        )
+    )
+
+    outcome = asyncio.run(
+        expand_state(
+            tree,
+            tree.root,
+            policy_client=policy,
+            env_backend=backend,
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=3),
+        )
+    )
+
+    assert [action.status for action in outcome.actions] == [
+        ActionNodeStatus.DEAD,
+        ActionNodeStatus.PROVED,
+        ActionNodeStatus.PROVED,
+    ]
+    assert outcome.actions[0].failure_message == (
+        "forbidden proof placeholder token: admit"
+    )
+    assert tree.root.status is StateNodeStatus.PROVED
+
+
 def test_expand_state_splits_goals_and_focuses_child_step() -> None:
     tree = SearchTree.create("search", make_state())
     policy = FakePolicyClient(["constructor"])

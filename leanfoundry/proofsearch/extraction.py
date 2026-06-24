@@ -11,6 +11,9 @@ from leanfoundry.proofsearch._tree import (
     StateNode,
     StateNodeStatus,
 )
+from leanfoundry.proofsearch._tree_init import (
+    SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
+)
 from leanfoundry.proofsearch.base import SearchConfig
 from leanfoundry.schemas import (
     ExtractionFailure,
@@ -84,18 +87,18 @@ def extract_training_artifacts(
     diagnostics = _base_diagnostics(tree, context)
 
     if tree.root.status is StateNodeStatus.PROVED:
-        if (
-            context.verification_status == "accepted"
-            and proof_tree is not None
-        ):
-            proof_candidates.append(proof_tree)
-            policy_examples = _policy_examples_from_proof_tree(
-                proof_tree,
+        policy_examples = _policy_examples_from_runtime_tree(tree, context)
+        if _should_emit_value_labels(context):
+            value_labels = _proved_value_labels_from_runtime_tree(
+                tree,
                 context,
             )
-            if _should_emit_value_labels(context):
-                value_labels = _proved_value_labels(proof_tree, context)
-        elif context.verification_status is not None:
+        if proof_tree is not None and proof_tree.verified:
+            proof_candidates.append(proof_tree)
+        elif (
+            proof_tree is not None
+            and context.verification_status is not None
+        ):
             failures.append(
                 ExtractionFailure(
                     kind="verification",
@@ -112,22 +115,11 @@ def extract_training_artifacts(
                     weight=1.0,
                     disproved=True,
                 )
-                for state in _real_initial_states(tree)
+                for state in _iter_real_states(tree)
                 if state.status is StateNodeStatus.DISPROVED
             ]
     else:
-        if _should_emit_censored_negative(context):
-            value_labels = [
-                _value_label(
-                    state,
-                    context,
-                    label=0,
-                    weight=context.config.censored_negative_weight,
-                    disproved=False,
-                )
-                for state in _real_initial_states(tree)
-                if state.status is StateNodeStatus.OPEN
-            ]
+        value_labels = _censored_negative_value_labels(tree, context)
 
     diagnostics["proof_candidates"] = len(proof_candidates)
     diagnostics["policy_examples"] = len(policy_examples)
@@ -142,17 +134,20 @@ def extract_training_artifacts(
     )
 
 
-def rendering_failure_artifacts(message: str) -> TrainingArtifacts:
-    """Return an artifact envelope for a proved tree that did not render."""
+def artifacts_with_failure(
+    artifacts: TrainingArtifacts,
+    failure: ExtractionFailure,
+) -> TrainingArtifacts:
+    """Return artifacts with one additional extraction failure."""
 
-    return TrainingArtifacts(
-        failures=[
-            ExtractionFailure(
-                kind="rendering",
-                message=message,
-            )
-        ],
-        diagnostics={"extraction_failures": 1},
+    failures = [*artifacts.failures, failure]
+    diagnostics = dict(artifacts.diagnostics)
+    diagnostics["extraction_failures"] = len(failures)
+    return artifacts.model_copy(
+        update={
+            "failures": failures,
+            "diagnostics": diagnostics,
+        }
     )
 
 
@@ -235,60 +230,118 @@ def _real_initial_states(tree: SearchTree) -> list[StateNode]:
     return [tree.root]
 
 
-def _policy_examples_from_proof_tree(
-    proof_tree: ProofTree,
+def _iter_real_states(tree: SearchTree) -> list[StateNode]:
+    states: list[StateNode] = []
+    for initial_state in _real_initial_states(tree):
+        states.extend(_iter_state_subtree(initial_state))
+    return states
+
+
+def _iter_state_subtree(state_node: StateNode) -> list[StateNode]:
+    states = [state_node]
+    for action in state_node.actions:
+        for child in action.children:
+            states.extend(_iter_state_subtree(child))
+    return states
+
+
+def _policy_examples_from_runtime_tree(
+    tree: SearchTree,
     context: ExtractionContext,
 ) -> list[PolicyExample]:
     examples: list[PolicyExample] = []
-    for root in proof_tree.roots:
-        examples.extend(_policy_examples_from_tactic_node(root, context))
+    for root in _real_initial_states(tree):
+        examples.extend(_policy_examples_from_state_node(root, context))
     return examples
 
 
-def _policy_examples_from_tactic_node(
-    tactic_node: TacticNode,
+def _policy_examples_from_state_node(
+    state_node: StateNode,
     context: ExtractionContext,
 ) -> list[PolicyExample]:
+    action = state_node.proved_action()
+    if action is None:
+        return []
     examples = [
         PolicyExample(
-            state=tactic_node.state,
-            tactic=tactic_node.tactic,
+            state=state_node.state,
+            proof_prefix=proof_prefix_for_state(state_node),
+            tactic=action.tactic,
             theorem_id=context.theorem_id,
             env_profile=context.env_profile,
-            depth=tactic_node.depth,
+            depth=state_node.depth,
             model_version=context.model_version,
         )
     ]
-    for child in tactic_node.children:
-        examples.extend(_policy_examples_from_tactic_node(child, context))
+    for child in action.children:
+        examples.extend(_policy_examples_from_state_node(child, context))
     return examples
 
 
-def _proved_value_labels(
-    proof_tree: ProofTree,
+def _proved_value_labels_from_runtime_tree(
+    tree: SearchTree,
     context: ExtractionContext,
 ) -> list[ValueLabel]:
     labels: list[ValueLabel] = []
-    for root in proof_tree.roots:
-        labels.extend(_proved_value_labels_from_tactic_node(root, context))
+    for root in _real_initial_states(tree):
+        labels.extend(_proved_value_labels_from_state_node(root, context))
     return labels
 
 
-def _proved_value_labels_from_tactic_node(
-    tactic_node: TacticNode,
+def _proved_value_labels_from_state_node(
+    state_node: StateNode,
     context: ExtractionContext,
 ) -> list[ValueLabel]:
+    action = state_node.proved_action()
+    if action is None:
+        return []
     labels = [
         _value_label(
-            tactic_node,
+            state_node,
             context,
             label=1,
             weight=1.0,
             disproved=False,
         )
     ]
-    for child in tactic_node.children:
-        labels.extend(_proved_value_labels_from_tactic_node(child, context))
+    for child in action.children:
+        labels.extend(_proved_value_labels_from_state_node(child, context))
+    return labels
+
+
+def proof_prefix_for_state(state_node: StateNode) -> str:
+    """Return the linear root-to-state tactic prefix for one runtime state."""
+
+    tactics: list[str] = []
+    action = state_node.parent_action
+    while action is not None:
+        if action.tactic != SYNTHETIC_INITIALIZATION_ACTION_TACTIC:
+            tactics.append(action.tactic)
+        action = action.parent_state.parent_action
+    return "\n".join(reversed(tactics))
+
+
+def _censored_negative_value_labels(
+    tree: SearchTree,
+    context: ExtractionContext,
+) -> list[ValueLabel]:
+    if not _should_emit_value_labels(context):
+        return []
+    labels: list[ValueLabel] = []
+    for state in _iter_real_states(tree):
+        if state.status is not StateNodeStatus.OPEN:
+            continue
+        if state.visit_count < context.config.min_censored_negative_effort:
+            continue
+        labels.append(
+            _value_label(
+                state,
+                context,
+                label=0,
+                weight=context.config.censored_negative_weight,
+                disproved=False,
+            )
+        )
     return labels
 
 
@@ -302,9 +355,10 @@ def _value_label(
 ) -> ValueLabel:
     state = node.state
     depth = node.depth
-    tactics_tried = context.search_budget_used
     if isinstance(node, TacticNode):
         tactics_tried = node.total_tactics_tried
+    else:
+        tactics_tried = node.visit_count
     return ValueLabel(
         state=state,
         label=label,
@@ -318,23 +372,15 @@ def _value_label(
     )
 
 
-def _should_emit_censored_negative(context: ExtractionContext) -> bool:
-    if not _should_emit_value_labels(context):
-        return False
-    return (
-        context.search_budget_used
-        >= context.config.min_censored_negative_effort
-    )
-
-
 def _should_emit_value_labels(context: ExtractionContext) -> bool:
     return context.config.value_mode == "bonded"
 
 
 __all__ = [
     "ExtractionContext",
+    "artifacts_with_failure",
     "extract_tactic_node_from_state",
     "extract_training_artifacts",
     "extraction_context_for_theorem",
-    "rendering_failure_artifacts",
+    "proof_prefix_for_state",
 ]

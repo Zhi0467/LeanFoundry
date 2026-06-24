@@ -534,6 +534,14 @@ def test_tree_engine_renders_branching_proof_shape() -> None:
         "  · trivial\n"
         "  · trivial"
     )
+    assert result.training_artifacts is not None
+    examples = result.training_artifacts.policy_examples
+    observed = [(example.proof_prefix, example.tactic) for example in examples]
+    assert observed == [
+        ("", "constructor"),
+        ("constructor", "trivial"),
+        ("constructor", "trivial"),
+    ]
     assert env.step_calls[1][3] == (0,)
     assert env.step_calls[2][3] == (1,)
 
@@ -609,16 +617,25 @@ def test_tree_engine_rejects_split_coupled_multi_goal_extraction() -> None:
         )
     )
 
-    assert result.status is SearchStatus.ERROR
+    assert result.status is SearchStatus.PROVED
+    assert result.proof_tree is None
     assert "multiple focused goals" in result.diagnostics["extraction_error"]
+    assert result.diagnostics["proof_artifact_status"] == "rendering_failed"
     assert result.training_artifacts is not None
+    examples = result.training_artifacts.policy_examples
+    observed = [(example.proof_prefix, example.tactic) for example in examples]
+    assert observed == [
+        ("", "splitter"),
+        ("splitter", "solve_coupled"),
+        ("splitter", "solve_independent"),
+    ]
     assert result.training_artifacts.failures[0].kind == "rendering"
     assert env.step_calls[1][3] == (0, 1)
     assert env.step_calls[2][3] == (2,)
     assert env.verify_calls == []
 
 
-def test_tree_engine_verify_rejection_emits_no_training_artifacts() -> None:
+def test_tree_engine_verify_rejection_keeps_path_a_artifacts() -> None:
     engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
     policy = FakePolicyClient(tactic_batches=[["trivial"]])
     env = FakeEnvBackend(
@@ -656,12 +673,16 @@ def test_tree_engine_verify_rejection_emits_no_training_artifacts() -> None:
         )
     )
 
-    assert result.status is SearchStatus.ERROR
-    assert result.proof_tree is None
+    assert result.status is SearchStatus.PROVED
+    assert result.proof_tree is not None
+    assert not result.proof_tree.verified
     assert result.training_artifacts is not None
     assert result.training_artifacts.proof_candidates == []
-    assert result.training_artifacts.policy_examples == []
-    assert result.training_artifacts.value_labels == []
+    assert result.training_artifacts.policy_examples[0].tactic == "trivial"
+    assert result.training_artifacts.policy_examples[0].proof_prefix == ""
+    assert result.training_artifacts.value_labels[0].label == 1
+    label = result.training_artifacts.value_labels[0]
+    assert label.tactics_tried_on_subtree == 1
     assert result.training_artifacts.failures[0].kind == "verification"
 
 

@@ -7,6 +7,7 @@ from leanfoundry.proofsearch._tree import (
     SearchTree,
     StateNode,
 )
+from leanfoundry.proofsearch._lean_tokens import find_lean_token
 from leanfoundry.proofsearch._tree_init import initial_code_for_theorem
 from leanfoundry.proofsearch.extraction import extract_tactic_node_from_state
 from leanfoundry.schemas import ProofTree, TheoremSpec
@@ -140,75 +141,11 @@ def _line_indent_before(code: str, position: int) -> str:
 
 
 def _find_first_sorry_token(code: str) -> int | None:
-    index = 0
-    block_comment_depth = 0
-    in_string = False
-    in_line_comment = False
-
-    while index < len(code):
-        character = code[index]
-        next_character = code[index + 1] if index + 1 < len(code) else ""
-
-        if in_line_comment:
-            if character == "\n":
-                in_line_comment = False
-            index += 1
-            continue
-
-        if in_string:
-            if character == "\\":
-                index += 2
-                continue
-            if character == "\"":
-                in_string = False
-            index += 1
-            continue
-
-        if block_comment_depth:
-            if character == "/" and next_character == "-":
-                block_comment_depth += 1
-                index += 2
-                continue
-            if character == "-" and next_character == "/":
-                block_comment_depth -= 1
-                index += 2
-                continue
-            index += 1
-            continue
-
-        if character == "-" and next_character == "-":
-            in_line_comment = True
-            index += 2
-            continue
-        if character == "/" and next_character == "-":
-            block_comment_depth = 1
-            index += 2
-            continue
-        if character == "\"":
-            in_string = True
-            index += 1
-            continue
-
-        if code.startswith("sorry", index) and _is_token_boundary(
-            code,
-            index,
-            index + 5,
-        ):
-            return index
-        index += 1
-    return None
-
-
-def _is_token_boundary(code: str, start: int, end: int) -> bool:
-    before = code[start - 1] if start > 0 else ""
-    after = code[end] if end < len(code) else ""
-    return not _is_identifier_character(
-        before
-    ) and not _is_identifier_character(after)
-
-
-def _is_identifier_character(character: str) -> bool:
-    return character.isalnum() or character in {"_", "'", "."}
+    match = find_lean_token(code, frozenset({"sorry"}))
+    if match is None:
+        return None
+    _token, position = match
+    return position
 
 
 def _indent_script(proof_script: str, indent: str) -> str:

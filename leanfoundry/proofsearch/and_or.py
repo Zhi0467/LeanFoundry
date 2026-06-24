@@ -35,9 +35,10 @@ from leanfoundry.proofsearch.base import (
     SearchStatus,
 )
 from leanfoundry.proofsearch.extraction import (
+    artifacts_with_failure,
+    ExtractionFailure,
     extract_training_artifacts,
     extraction_context_for_theorem,
-    rendering_failure_artifacts,
 )
 from leanfoundry.schemas import TheoremSpec
 
@@ -148,18 +149,38 @@ class AndOrSearchEngine(SearchEngine):
                 )
 
             if tree.root.status is StateNodeStatus.PROVED:
+                proved_context = extraction_context_for_theorem(
+                    theorem,
+                    config=config,
+                    search_budget_used=tree.tactic_calls_made,
+                    attempt_id=attempt_context.attempt_id,
+                    search_item_id=search_item_id,
+                    verify_item_id=attempt_context.verify_item_id,
+                )
                 try:
                     proof_tree = extract_proof_tree(tree, theorem)
                 except (UnsupportedProofExtraction, ValueError) as error:
+                    artifacts = extract_training_artifacts(
+                        tree,
+                        proved_context,
+                    )
+                    artifacts = artifacts_with_failure(
+                        artifacts,
+                        ExtractionFailure(
+                            kind="rendering",
+                            message=str(error),
+                        ),
+                    )
                     return await finish(
                         SearchResult(
                             theorem_id=theorem.id,
-                            status=SearchStatus.ERROR,
-                            training_artifacts=rendering_failure_artifacts(
-                                str(error)
-                            ),
+                            status=SearchStatus.PROVED,
+                            training_artifacts=artifacts,
                             search_budget_used=tree.tactic_calls_made,
-                            diagnostics={"extraction_error": str(error)},
+                            diagnostics={
+                                "proof_artifact_status": "rendering_failed",
+                                "extraction_error": str(error),
+                            },
                         ),
                     )
                 return await finish(
@@ -171,14 +192,7 @@ class AndOrSearchEngine(SearchEngine):
                         proof_tree,
                         tree.tactic_calls_made,
                         tree,
-                        extraction_context_for_theorem(
-                            theorem,
-                            config=config,
-                            search_budget_used=tree.tactic_calls_made,
-                            attempt_id=attempt_context.attempt_id,
-                            search_item_id=search_item_id,
-                            verify_item_id=attempt_context.verify_item_id,
-                        ),
+                        proved_context,
                     )
                 )
 
