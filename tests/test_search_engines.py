@@ -21,6 +21,7 @@ from lean_client.exec_models import (
     ExecVerifyResult,
 )
 
+import leanfoundry.proofsearch.and_or as and_or_module
 from leanfoundry.proofsearch import (
     SearchAlgorithm,
     SearchAttemptContext,
@@ -33,10 +34,19 @@ from leanfoundry.proofsearch._selection import (
     BestFirstSelection,
     PuctSelection,
 )
+from leanfoundry.proofsearch._tree import SearchTree
+from leanfoundry.proofsearch._tree_init import (
+    InitializedSearchTree,
+    SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
+)
 from leanfoundry.proofsearch.and_or import AndOrSearchEngine
 from leanfoundry.proofsearch.direct import DirectSearchEngine
 from leanfoundry.replay import SQLiteReplayStore
-from leanfoundry.schemas import TheoremSpec
+from leanfoundry.schemas import (
+    FactorizedProofState,
+    GoalComponent,
+    TheoremSpec,
+)
 
 
 class FakePolicyClient:
@@ -269,6 +279,15 @@ def root_state(token: str = "root-token") -> ExecStateInfo:
     return ExecStateInfo(
         state_token=token,
         goals=[ExecGoalInfo(target="True", pretty="|- True")],
+    )
+
+
+def factorized_state(token: str = "state-token") -> FactorizedProofState:
+    return FactorizedProofState(
+        env_profile="test-env",
+        goal_components=[GoalComponent(target="True", pretty="|- True")],
+        pretty_state="|- True",
+        state_token=token,
     )
 
 
@@ -938,6 +957,70 @@ def test_tree_engine_exhausted_open_root_emits_censored_value_only() -> None:
     assert label.weight == 0.2
     assert not label.disproved
     assert label.tactics_tried_on_subtree == 1
+
+
+def test_tree_engine_maps_explicit_disproved_root(monkeypatch) -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    env = FakeEnvBackend()
+    policy = FakePolicyClient()
+
+    async def initialize_disproved_tree(
+        _env_backend,
+        _theorem,
+        *,
+        search_id: str,
+    ) -> InitializedSearchTree:
+        synthetic_root_state = FactorizedProofState(
+            env_profile="test-env",
+            goal_components=[],
+            pretty_state="theorem t : True := by\n  sorry",
+            state_token=None,
+        )
+        tree = SearchTree.create(search_id, synthetic_root_state)
+        initialization_action = tree.add_action(
+            tree.root,
+            SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
+            prior=1.0,
+        )
+        initial_state = tree.add_child_state(
+            initialization_action,
+            factorized_state("disproved-root"),
+        )
+        tree.mark_state_disproved(initial_state, message="negation proof")
+        tree.mark_state_disproved(tree.root, message="root disproved")
+        return InitializedSearchTree(tree=tree, initial_code="")
+
+    monkeypatch.setattr(
+        and_or_module,
+        "initialize_search_tree",
+        initialize_disproved_tree,
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("disproved-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                value_mode="bonded",
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.DISPROVED
+    assert result.training_artifacts is not None
+    assert result.proof_tree is None
+    assert env.verify_calls == []
+    assert env.cleanup_calls == [["disproved-attempt:search"]]
+    assert len(result.training_artifacts.value_labels) == 1
+    label = result.training_artifacts.value_labels[0]
+    assert label.label == 0
+    assert label.weight == 1.0
+    assert label.disproved
+    assert label.state.state_token == "disproved-root"
 
 
 def test_tree_engine_reports_mixed_overloaded_backend_protocol_error() -> None:

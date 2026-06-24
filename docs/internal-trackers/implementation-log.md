@@ -465,3 +465,16 @@ Validation: included in the next checkpoint verification.
   integration through the training extra.
 
 Validation: docs-only; included in the next checkpoint verification.
+
+## 2026-06-24: DISPROVED status and value-label prep
+
+- Mapped an explicitly `DISPROVED` runtime root to top-level
+  `SearchStatus.DISPROVED` instead of falling through to `EXHAUSTED`.
+- Extracted full-weight `ValueLabel(label=0, disproved=True)` rows for every
+  explicitly disproved runtime state in proved, disproved, and open attempts.
+- Added regression coverage for internal disproved-node extraction and the
+  explicit-disproved-root engine path. This does not implement negation
+  pruning; it only makes existing DISPROVED certificates observable and
+  trainable.
+
+Validation: included in the next checkpoint verification.

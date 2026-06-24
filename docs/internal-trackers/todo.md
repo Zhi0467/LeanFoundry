@@ -216,11 +216,6 @@ not repeated here.
      `proof_prefix` (history-conditional formulation).
 
 5. Extraction hardening (after the Path-A baseline)
-   - `DISPROVED` semantics (gate before `try_negation`): map a disproved root to
-     a disproved top-level outcome (today it falls through to `EXHAUSTED`, so
-     `SearchStatus.DISPROVED` is never produced), and emit full-weight
-     `ValueLabel(label=0, disproved=True)` for disproved internal nodes, not just
-     the initial layer.
    - Multiple-proved-action extraction: emit each independently verified proved
      action as its own candidate, or keep canonical-first and record skipped
      alternatives as a non-training diagnostic.
@@ -253,9 +248,10 @@ not repeated here.
    - Bonded value: `wrap(policy_client) -> value_client`; emit
      `state_value_labels` only when LeanFoundry owns bonded labels; keep unbonded
      value clients label-free.
-   - Negation: deferred; prep = the `DISPROVED` fixes above + trace metrics. When
-     built, `try_negation` is provenance-gated, counts against `max_tactic_calls`,
-     and emits full-weight disproved zero labels.
+   - Negation: deferred; remaining prep = trace metrics. When built,
+     `try_negation` is provenance-gated, counts against `max_tactic_calls`, and
+     emits full-weight disproved zero labels through the landed DISPROVED
+     artifact path.
 
 8. Deferred algorithms + extensions
    - Tactic beam, optimistic/RMaxTS, graph/MCGS: off the core path until

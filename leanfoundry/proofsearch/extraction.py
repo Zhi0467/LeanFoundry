@@ -85,6 +85,10 @@ def extract_training_artifacts(
     value_labels: list[ValueLabel] = []
     failures: list[ExtractionFailure] = []
     diagnostics = _base_diagnostics(tree, context)
+    disproved_value_labels = _disproved_value_labels_from_runtime_tree(
+        tree,
+        context,
+    )
 
     if tree.root.status is StateNodeStatus.PROVED:
         policy_examples = _policy_examples_from_runtime_tree(tree, context)
@@ -93,6 +97,7 @@ def extract_training_artifacts(
                 tree,
                 context,
             )
+            value_labels.extend(disproved_value_labels)
         if proof_tree is not None and proof_tree.verified:
             proof_candidates.append(proof_tree)
         elif (
@@ -106,20 +111,10 @@ def extract_training_artifacts(
                 )
             )
     elif tree.root.status is StateNodeStatus.DISPROVED:
-        if _should_emit_value_labels(context):
-            value_labels = [
-                _value_label(
-                    state,
-                    context,
-                    label=0,
-                    weight=1.0,
-                    disproved=True,
-                )
-                for state in _iter_real_states(tree)
-                if state.status is StateNodeStatus.DISPROVED
-            ]
+        value_labels = disproved_value_labels
     else:
         value_labels = _censored_negative_value_labels(tree, context)
+        value_labels.extend(disproved_value_labels)
 
     diagnostics["proof_candidates"] = len(proof_candidates)
     diagnostics["policy_examples"] = len(policy_examples)
@@ -315,6 +310,25 @@ def _proved_value_labels_from_state_node(
     for child in action.children:
         labels.extend(_proved_value_labels_from_state_node(child, context))
     return labels
+
+
+def _disproved_value_labels_from_runtime_tree(
+    tree: SearchTree,
+    context: ExtractionContext,
+) -> list[ValueLabel]:
+    if not _should_emit_value_labels(context):
+        return []
+    return [
+        _value_label(
+            state,
+            context,
+            label=0,
+            weight=1.0,
+            disproved=True,
+        )
+        for state in _iter_real_states(tree)
+        if state.status is StateNodeStatus.DISPROVED
+    ]
 
 
 def proof_prefix_for_state(state_node: StateNode) -> str:

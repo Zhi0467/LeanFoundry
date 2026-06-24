@@ -196,6 +196,30 @@ class AndOrSearchEngine(SearchEngine):
                     )
                 )
 
+            if tree.root.status is StateNodeStatus.DISPROVED:
+                disproved_context = extraction_context_for_theorem(
+                    theorem,
+                    config=config,
+                    search_budget_used=tree.tactic_calls_made,
+                    attempt_id=attempt_context.attempt_id,
+                    search_item_id=search_item_id,
+                    verify_item_id=attempt_context.verify_item_id,
+                )
+                return await finish(
+                    SearchResult(
+                        theorem_id=theorem.id,
+                        status=SearchStatus.DISPROVED,
+                        training_artifacts=extract_training_artifacts(
+                            tree,
+                            disproved_context,
+                        ),
+                        search_budget_used=tree.tactic_calls_made,
+                        diagnostics={
+                            "root_status": tree.root.status.value,
+                        },
+                    )
+                )
+
             exhausted_context = extraction_context_for_theorem(
                 theorem,
                 config=config,
@@ -213,7 +237,7 @@ class AndOrSearchEngine(SearchEngine):
                         exhausted_context,
                     ),
                     search_budget_used=tree.tactic_calls_made,
-                    diagnostics={"root_status": tree.root.status},
+                    diagnostics={"root_status": tree.root.status.value},
                 )
             )
         except BackendProtocolError as error:
