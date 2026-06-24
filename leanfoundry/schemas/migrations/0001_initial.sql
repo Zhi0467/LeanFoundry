@@ -63,6 +63,20 @@ CREATE TABLE trajectories (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Positive per-state tactic examples extracted from accepted search steps.
+CREATE TABLE policy_examples (
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT REFERENCES theorems(id),
+  env_profile TEXT NOT NULL,
+  proof_state_hash TEXT NOT NULL,
+  proof_state_pretty TEXT,
+  proof_prefix TEXT NOT NULL DEFAULT '',
+  tactic TEXT NOT NULL,
+  depth INTEGER NOT NULL,
+  model_version INTEGER,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Supervised value labels extracted from search traces.
 --
 -- label = 1 means the state was proved.

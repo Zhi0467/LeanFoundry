@@ -91,10 +91,12 @@ Status values:
    - Keep future durable fields backend-neutral before treating migrations as a
      stable API.
 
-5. Replay persistence is schema/protocol-only.
-   - Migrations and `ReplayStore` protocol exist, but there is no concrete
-     SQLite implementation and no search-result-to-store writer.
-   - This blocks the durable trajectory/value spine promised by the design.
+5. Replay persistence has a concrete Path-A implementation.
+   - Resolved for the baseline: `SQLiteReplayStore` and
+     `persist_search_result(...)` write theorem, trajectory, policy-example,
+     value-label, and verified A-type rows.
+   - Still open beyond Path-A: richer failure persistence, cleanup outbox,
+     eval artifact writers, and compatibility/versioned migration policy.
 
 ### Stale Or Ambiguous Design Text
 

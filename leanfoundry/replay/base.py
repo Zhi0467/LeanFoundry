@@ -8,6 +8,7 @@ from typing import Protocol
 from leanfoundry.schemas import (
     ATypeDataRecord,
     TheoremRecord,
+    PolicyExample,
     TrajectoryRecord,
     ValueLabel,
 )
@@ -24,6 +25,12 @@ class ReplayStore(Protocol):
 
     async def put_a_type_data(self, sample: ATypeDataRecord) -> None:
         """Insert one verified theorem/proof training sample."""
+
+    async def put_policy_examples(
+        self,
+        examples: Sequence[PolicyExample],
+    ) -> None:
+        """Insert positive per-state tactic-policy examples."""
 
     async def put_trajectory(self, trajectory: TrajectoryRecord) -> None:
         """Insert one search trajectory."""

@@ -359,3 +359,29 @@ Validation:
 - `uv run --no-dev --with flake8 flake8 leanfoundry/proofsearch
   tests/test_expansion.py tests/test_extraction.py tests/test_search_engines.py`
   passed.
+
+## 2026-06-24: Path-A SQLite replay store and writer
+
+- Added a concrete `SQLiteReplayStore` that applies the initial migration on a
+  fresh database and persists theorem records, verified A-type proof rows,
+  per-state policy examples, value labels, and trajectory records.
+- Added a `policy_examples` table for the Path-A policy rows; state hashes and
+  row ids are deterministic content hashes so repeated writes are idempotent.
+- Added `persist_search_result(...)`, which writes a theorem attempt into the
+  replay store and returns the `SearchResult` with replay diagnostics
+  (`replay_trajectories`, `replay_policy_examples`, `replay_value_labels`,
+  `replay_a_type_data`, and `replay_theorem_id`).
+- Wired `run_search_batch(..., replay_store=..., model_version=...)` to
+  stream-write each attempt after search completes. Replay write failures are
+  reported in result diagnostics as `replay_write_failed` without masking the
+  primary search outcome.
+- Added driver coverage proving a solved tree-search attempt writes theorem,
+  trajectory, policy, value, and A-type rows to SQLite.
+
+Validation:
+
+- `uv run --no-dev --with pytest pytest tests/test_schema_database_consistency.py
+  tests/test_package_import.py tests/test_search_engines.py` -> 33 passed.
+- `uv run --no-dev --with flake8 flake8 leanfoundry/replay
+  leanfoundry/proofsearch/driver.py tests/test_schema_database_consistency.py
+  tests/test_search_engines.py` passed.

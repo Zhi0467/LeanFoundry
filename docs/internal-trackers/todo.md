@@ -2,7 +2,7 @@
 
 This file is future-facing: active implementation plans, unresolved design
 questions, and remaining work. It has four parts: settled **Current Contracts**,
-the **SearchConfig** reference, the **Current Build Target** (Path-A), and the
+the **SearchConfig** reference, the **Current Path-A Baseline**, and the
 **Roadmap** of everything after it.
 
 Historical implementation notes live in
@@ -109,7 +109,7 @@ them: wall-clock cap per theorem, max tree nodes, max depth, max expansions,
 per-state action cap, outer decomposition/revision budgets. Backend per-request
 timeouts belong to the `/exec` request/config layer, not tree-search semantics.
 
-## Current Build Target: Path-A Data Pipeline
+## Current Path-A Baseline
 
 The training baseline is per-node extraction, decoupled from whole-proof
 rendering (AlphaZero-style per-state training: observation = Lean proof state,
@@ -141,16 +141,13 @@ sorry (e.g. `native_decide`'s `ofReduceBool`) is out of scope; a `native_decide`
 proof is real, and `/exec/verify`'s `allowed_axioms` covers it for Path B.
 
 Storage (the durable buffer): concrete SQLite `ReplayStore` plus a writer that
-turns `TrainingArtifacts` into durable rows (policy examples, value labels,
-trajectory record) as attempts land. Deterministic content-hash ids for
-idempotent writes; keep-all-with-provenance (`attempt_id`, `model_version`),
-dedup at read time. This durable store is a side archive for eval/HER/offline;
-it is NOT the online RL conduit (Slime owns that, below).
-
-Remaining slices:
-1. Store: concrete SQLite `ReplayStore` + writer + deterministic ids;
-   stream-write per attempt.
-2. Wire-up: driver/runner persists artifacts; minimal solved/throughput counts.
+turns
+`TrainingArtifacts` into durable rows (policy examples, value labels, verified
+A-type proof rows, and one trajectory record) as attempts land. Deterministic
+content-hash ids make writes idempotent; rows keep provenance through
+`attempt_id`-derived trajectory ids, `theorem_id`, and `model_version`. This
+durable store is a side archive for eval/HER/offline; it is NOT the online RL
+conduit (Slime owns that, below).
 
 Decisions:
 - Policy target is the single proved `tactic` string (SFT / expert-iteration). A
@@ -188,8 +185,8 @@ Slime adapter plan (read from THUDM/slime source; added as the CI-excluded
 
 ## Roadmap (after Path-A)
 
-Sequenced roughly in build order. Items the Path-A target already covers are not
-repeated here.
+Sequenced roughly in build order. Items the Path-A baseline already covers are
+not repeated here.
 
 1. Core alignment (verifiable, clean durable schema)
    - Enforce env profiles: replace ambiguous defaults with a pinned profile or a

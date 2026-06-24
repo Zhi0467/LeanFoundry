@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -34,6 +35,7 @@ from leanfoundry.proofsearch._selection import (
 )
 from leanfoundry.proofsearch.and_or import AndOrSearchEngine
 from leanfoundry.proofsearch.direct import DirectSearchEngine
+from leanfoundry.replay import SQLiteReplayStore
 from leanfoundry.schemas import TheoremSpec
 
 
@@ -1008,6 +1010,69 @@ def test_run_search_batch_uses_runner_provided_direct_verify_ids() -> None:
         "direct-two:verify:1",
     ]
     assert env.cleanup_calls == []
+
+
+def test_run_search_batch_persists_path_a_artifacts(tmp_path) -> None:
+    db_path = tmp_path / "replay.db"
+    store = SQLiteReplayStore(db_path)
+    policy = FakePolicyClient(tactic_batches=[["trivial"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="trivial", status="complete")],
+            )
+        ],
+    )
+
+    results = asyncio.run(
+        run_search_batch(
+            [theorem().model_copy(update={"id": "thm"})],
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+            max_concurrent=1,
+            replay_store=store,
+            model_version=7,
+        )
+    )
+    store.close()
+
+    result = results[0]
+    assert result.status is SearchStatus.PROVED
+    assert result.theorem_id == "thm"
+    assert result.diagnostics["replay_trajectories"] == 1
+    assert result.diagnostics["replay_policy_examples"] == 1
+    assert result.diagnostics["replay_value_labels"] == 1
+    assert result.diagnostics["replay_a_type_data"] == 1
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM theorems").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM trajectories").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM a_type_data").fetchone()[0] == 1
+    policy_row = conn.execute(
+        """
+        SELECT theorem_id, proof_prefix, tactic, model_version
+        FROM policy_examples
+        """
+    ).fetchone()
+    assert policy_row == ("thm", "", "trivial", 7)
+    value_row = conn.execute(
+        """
+        SELECT theorem_id, label, weight, tactics_tried_on_subtree,
+               model_version
+        FROM state_value_labels
+        """
+    ).fetchone()
+    assert value_row == ("thm", 1, 1.0, 1, 7)
 
 
 def test_tree_engine_retries_deferred_cleanup_after_verification() -> None:

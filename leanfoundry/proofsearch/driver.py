@@ -23,6 +23,7 @@ from leanfoundry.proofsearch.base import (
     SearchStatus,
 )
 from leanfoundry.proofsearch.factory import build_engine
+from leanfoundry.replay import ReplayStore, persist_search_result
 from leanfoundry.schemas import TheoremSpec
 
 
@@ -35,6 +36,8 @@ async def run_search_batch(
     config: SearchConfig,
     max_concurrent: int | None = None,
     attempt_contexts: Sequence[SearchAttemptContext] | None = None,
+    replay_store: ReplayStore | None = None,
+    model_version: int = 0,
 ) -> list[SearchResult]:
     """Run independent theorem searches concurrently under an in-flight cap."""
 
@@ -62,13 +65,21 @@ async def run_search_batch(
             attempt_context = attempt_contexts[index]
         async with semaphore:
             try:
-                return await engine.search(
+                result = await engine.search(
                     theorem,
                     attempt_context=attempt_context,
                     policy_client=policy_client,
                     value_client=value_client,
                     env_backend=env_backend,
                     config=config,
+                )
+                if replay_store is None:
+                    return result
+                return await _persist_result_best_effort(
+                    replay_store,
+                    theorem,
+                    result,
+                    model_version=model_version,
                 )
             except asyncio.CancelledError:
                 await cancel_search_state_best_effort(
@@ -119,6 +130,28 @@ def _runner_error_result(
         ),
         attempt_context,
     )
+
+
+async def _persist_result_best_effort(
+    replay_store: ReplayStore,
+    theorem: TheoremSpec,
+    result: SearchResult,
+    *,
+    model_version: int,
+) -> SearchResult:
+    """Persist one result without masking the primary search outcome."""
+
+    try:
+        return await persist_search_result(
+            replay_store,
+            theorem,
+            result,
+            model_version=model_version,
+        )
+    except Exception as error:
+        diagnostics = dict(result.diagnostics)
+        diagnostics["replay_write_failed"] = str(error)
+        return result.model_copy(update={"diagnostics": diagnostics})
 
 
 def _uses_search_state(algorithm: SearchAlgorithm) -> bool:

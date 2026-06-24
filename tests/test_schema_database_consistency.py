@@ -11,6 +11,7 @@ from leanfoundry.schemas.records import (
     TheoremRecord,
 )
 from leanfoundry.schemas.trajectory import TrajectoryRecord
+from leanfoundry.schemas.trajectory import PolicyExample
 from leanfoundry.schemas.value import ValueLabel
 
 MIGRATION_PATH = (
@@ -35,6 +36,9 @@ _MODEL_FIELDS_NOT_IN_SQL: dict[type[Any], set[str]] = {
     ValueLabel: {
         "state",  # pretty-printed into proof_state_pretty at storage time
     },
+    PolicyExample: {
+        "state",  # pretty-printed into proof_state_pretty at storage time
+    },
 }
 
 # SQL columns with no direct Python model field because they are derived or
@@ -47,12 +51,22 @@ _EXTRA_SQL_COLUMNS: dict[str, set[str]] = {
         "id",  # assigned at insert
         "proof_state_pretty",  # pretty-print of ValueLabel.state
     },
+    "policy_examples": {
+        "id",  # assigned at insert
+        "proof_state_hash",  # derived from PolicyExample.state
+        "proof_state_pretty",  # pretty-print of PolicyExample.state
+        "created_at",  # assigned by SQLite
+    },
 }
 
 _SQL_DERIVED_NOT_NULL_COLUMNS: dict[str, set[str]] = {
     "state_value_labels": {
         "id",  # assigned at insert
         "proof_state_hash",  # derived from ValueLabel.state when omitted
+    },
+    "policy_examples": {
+        "id",  # assigned at insert
+        "proof_state_hash",  # derived from PolicyExample.state
     },
 }
 
@@ -61,6 +75,7 @@ TABLE_MODELS: dict[str, type[Any]] = {
     "a_type_data": ATypeDataRecord,
     "formal_statements_staging": FormalStatementStagingRecord,
     "trajectories": TrajectoryRecord,
+    "policy_examples": PolicyExample,
     "state_value_labels": ValueLabel,
 }
 
