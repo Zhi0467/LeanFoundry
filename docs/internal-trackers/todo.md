@@ -191,9 +191,6 @@ not repeated here.
 1. Core alignment (verifiable, clean durable schema)
    - Enforce env profiles: replace ambiguous defaults with a pinned profile or a
      required config path; validate header/hash/profile identity at data ingress.
-   - Design-doc de-stale pass (separate): G1-G4, §2.8 `/verify`, §4 store
-     examples, §10 `lean_client` boundary, §3.6 supported algorithms, Part II
-     training scope, extension status wording.
 
 2. Durable spine + eval (beyond the Path-A store)
    - Decide durable artifact shape: tables vs files, deterministic ids, content

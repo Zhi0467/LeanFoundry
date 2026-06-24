@@ -447,3 +447,21 @@ for this checkpoint.
   `policy_examples` migration used by pre-Path-A databases.
 
 Validation: included in the next checkpoint verification.
+
+## 2026-06-24: Design de-stale completion pass
+
+- Updated the validation harness and training flow to use `/exec/verify` for
+  search-path proof acceptance, while leaving REPL `/verify` only for
+  Extension-B statement checks.
+- Replaced stale current-path MCGS/MCTS/HER wording with the landed
+  direct/self-correct/tree-search Path-A baseline, and marked beam,
+  graph/MCGS, node-general HER, richer rendering, and TTT support as deferred.
+- Refreshed §4 SQL examples to match the current migrations, including
+  `policy_examples`, `proof_prefix`, value-label `weight`, and
+  `verified_by_backend`.
+- Narrowed the repository boundary section to the actual package contents:
+  `lean-client` only at the EnvBackend adapter boundary, proofsearch direct/tree
+  engines, replay SQLite store/writer, eval protocol stubs, and optional Slime
+  integration through the training extra.
+
+Validation: docs-only; included in the next checkpoint verification.

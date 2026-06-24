@@ -287,16 +287,26 @@ So `TheoremSpec` must carry `source` (propagated from `theorems.source`); the en
 **R1 — Request-level dispatcher / two-level batching design.**
 Two parallelism levels exist: proof-search level (many theorem/proof-graph searches running simultaneously) and tactic-candidate level (N tactics sampled for one selected proof state). The current backend decision is that the **scheduler unit is the proof-state expansion request**, not an individual tactic. One expansion request contains `state_token + tactics[]` and leases exactly one Lean worker; that worker loads the state once and applies the tactic candidates internally. Many expansion requests from many proof graphs are then batched into one Env Backend `/exec/step_batch` request, matching Kimina's existing "one HTTP request contains many independent items" design. This avoids the bad behavior where 16 tactic candidates from one state become 16 manager jobs and cause the Kimina pool to cold-start 16 identical compatible workers.
 
-Within one theorem, MCTS iterations remain strictly sequential — iteration N's selection depends on backpropagation from iteration N-1. Across theorem/proof-graph searches, expansion requests are independent and can be batched. The concrete v0 client boundary is the `lean-client` package: LeanFoundry's EnvBackend adapter uses the single `AsyncLeanExecBackend` façade (which owns the HTTP client, the proof-state env, and the step batcher, sized from `/exec/limits`), so request width and in-flight count come from the backend's `/exec/limits` response. Remaining empirical questions are the EnvClient microbatch window, max items per HTTP request, queue-depth backpressure, and worker-pool sizing. These are v0 profiling parameters, not open semantic design questions.
+Within one theorem, tree-search iterations remain strictly sequential —
+iteration N's selection depends on backpropagation from iteration N-1. Across
+theorem/proof-graph searches, expansion requests are independent and can be
+batched. The concrete v0 client boundary is the `lean-client` package:
+LeanFoundry's EnvBackend adapter uses the single `AsyncLeanExecBackend` façade
+(which owns the HTTP client, the proof-state env, and the step batcher, sized
+from `/exec/limits`), so request width and in-flight count come from the
+backend's `/exec/limits` response. Remaining empirical questions are the
+EnvClient microbatch window, max items per HTTP request, queue-depth
+backpressure, and worker-pool sizing. These are v0 profiling parameters, not
+open semantic design questions.
 
 **R2 — HER verified multiplier vs candidate multiplier gap.**
-The theoretical HER amplification (10–50× from Aristotle) assumes most proved subtrees survive standalone re-verification through Kimina. In practice, subproofs that reference outer local context will fail. The actual `her_verified_multiplier` is unknown until the first MCTS training runs. If the gap to `her_candidate_multiplier` is large, HER's flywheel contribution is smaller than expected.
+The theoretical HER amplification (10–50× from Aristotle) assumes most proved subtrees survive standalone re-verification through Kimina. In practice, subproofs that reference outer local context will fail. The actual `her_verified_multiplier` is unknown until search-based training traces exist and node-general HER is implemented. If the gap to `her_candidate_multiplier` is large, HER's flywheel contribution is smaller than expected.
 
 **R3 — Value function censored-negative weight.**
-The current design uses weight=0.25 for censored negatives. This is a guess. If too high, the value function becomes overly pessimistic and the policy stops exploring hard states. If too low, value is uncalibrated for failing states. Requires ablation once Stage 3 MCTS EI is running.
+The current design uses weight=0.25 for censored negatives. This is a guess. If too high, the value function becomes overly pessimistic and the policy stops exploring hard states. If too low, value is uncalibrated for failing states. Requires ablation once Stage 3 search-based EI is running.
 
 **R4 — Whether negation pruning is worth implementation cost at LeanDojo scale.**
-Negation pruning pays off when a significant fraction of budget is wasted on provably-false subgoals. At LeanDojo difficulty this fraction is unknown. Recommend deferring until Stage 3 MCTS traces can be analyzed for how often goals are unprovable.
+Negation pruning pays off when a significant fraction of budget is wasted on provably-false subgoals. At LeanDojo difficulty this fraction is unknown. Recommend deferring until Stage 3 search traces can be analyzed for how often goals are unprovable.
 
 **R5 — Dynamic CoT budget training with Qwen3.6's thinking mode.**
 Aristotle trains CoT budget implicitly by only training on thinking traces that preceded successful actions. Qwen3.6-27B has native `<think>...</think>` tokens. Whether to enable thinking for tactic prediction (currently disabled by default), and how to train dynamic budget without dedicated trace infrastructure, is unresolved. Empirical ablation recommended: SFT with thinking enabled vs disabled for Format 2; measure tactic accuracy and proof discovery rate.
@@ -454,8 +464,8 @@ proofs-per-hour.
 │             ▼                                       │ sample_tactics()
 │  ┌─────────────────────┐   write A-type  ┌──────────▼──────────┐  │
 │  │    Data Buffer      │◄────────────────│   Search Engine     │  │
-│  │     (SQLite)        │   read B-type   │  MCGS / beam /      │  │
-│  │                     │────────────────►│  direct / ...       │  │
+│  │     (SQLite)        │   read B-type   │  direct / tree /    │  │
+│  │                     │────────────────►│  self-correct       │  │
 │  └─────────────────────┘                 └──────────┬──────────┘  │
 │                                                      │             │
 │  ┌─────────────────────┐          HTTP  /exec/step_batch          │
@@ -463,7 +473,7 @@ proofs-per-hour.
 │  │  solved@budget      │                              ▼            │
 │  │  pass@k / curves    │                  ┌───────────────────┐   │
 │  └─────────────────────┘                  │   Env Backend     │   │
-│                                           │  (Kimina-MCTS)    │   │
+│                                           │ Kimina/Pantograph │   │
 │                                           │ profiled workers  │   │
 │                                           └───────────────────┘   │
 │                                                                    │
@@ -485,13 +495,13 @@ proofs-per-hour.
   ┌───────────────────────┐   write   ┌───────────▼───────────┐
   │    Data Buffer        │◄──────────│   Search Engine       │
   │  PostgreSQL /         │   read    │   CPU nodes           │
-  │  Redis Streams        │──────────►│   MCGS orchestration  │
+  │  Redis Streams        │──────────►│   search orchestration│
   └───────────────────────┘           └───────────┬───────────┘
                                                   │ TCP
                                                   ▼
                                       ┌───────────────────────┐
                                       │   Env Backend         │
-                                      │  Kimina-MCTS pool     │
+                                      │  Kimina/Pantograph    │
                                       │  + C++ REPL Router    │
                                       │  CPU-only preemptible │
                                       └───────────────────────┘
@@ -636,7 +646,7 @@ class EnvProfile:
 
 Rules:
 - Every A-type training sample must have a verified env_profile field
-- Kimina-MCTS scheduler uses header_hash for LRU routing
+- Env Backend scheduler uses header_hash for LRU routing
 - Never mix env_profiles in a single training batch
 - When consuming external data (Goedel, DeepSeek proofs), re-verify
   under our own env_profile before adding to training set
@@ -662,8 +672,9 @@ Kimina Lean Server (project-numina/kimina-lean-server) provides:
 - Infotree extraction (tactic state annotations) — REPL/verify-mode only
 
 This is the infrastructure we build on. We do NOT build a separate
-LeanStepServer. We fork Kimina and add MCTS capabilities as new job
-types inside the same scheduler.
+LeanStepServer. The Env Backend adds `/exec` proof-state stepping,
+verification, cleanup, and cancellation while keeping the server-owned
+scheduler/worker lifecycle.
 
 ### 2.2 Current Backend Decision: Kimina Pool + Pantograph Worker
 
@@ -1054,7 +1065,7 @@ For each known proof in LeanDojo:
 2. Replay each known tactic through /exec/step_batch
 3. Compare resulting Pantograph goals to trace goals where trace data exists
 4. Render final proof from collected tactic history
-5. Verify final proof through /verify
+5. Verify final proof through /exec/verify
 6. Measure state-token size, load/tactic/save latency, and cache efficiency
 7. Stress queueing with many proof-state items per batch
 ```
@@ -1073,14 +1084,14 @@ state_token_size_p50            < 5MB
 goal_load_time_p50              < 200ms
 ```
 
-If this harness is weak, MCTS training produces garbage silently.
+If this harness is weak, search training produces garbage silently.
 Validate before any training run.
 
 ---
 
 ## 3. Search Engine
 
-The search engine is a Python process that orchestrates MCTS. It has no
+The search engine is a Python process that orchestrates direct and tree search. It has no
 Lean knowledge — it only knows about nodes, actions, values, and scores.
 All Lean execution is delegated to an EnvBackend client. In the v0
 implementation, that client is the `lean-client` `AsyncLeanExecBackend` façade
@@ -1191,7 +1202,7 @@ If selected by the training repo, LeanTree data can be used for:
 - Value/critic warm-start
   weak labels from proof_depth, proof_size, solved subtree structure
 
-- Kimina-MCTS validation
+- Env Backend validation
   replay LeanTree proof-tree edges through /exec/step_batch
   compare resulting post-tactic FactorizedProofState
 ```
@@ -1238,7 +1249,7 @@ Training repo checks:
   - raw whole-state tactic SFT vs factorized-state tactic SFT
   - prompt length reduction
   - tactic validity / next-tactic accuracy
-  - value warm-start impact on MCTS solved@budget
+  - value warm-start impact on tree solved@budget
 
 Infra repo checks:
   - can LeanTree traces replay under our env_profile?
@@ -1253,7 +1264,7 @@ Integration path:
 
 ```text
 1. training repo ingests LeanTree dataset offline, if selected
-2. infra replay validator replays traces through Kimina-MCTS
+2. infra replay validator replays traces through Env Backend
 3. only after replay validation, port factorized_state into /exec/step_batch
 4. only after state-equivalence validation, enable MCGS graph merging
 ```
@@ -1285,9 +1296,9 @@ def ucb_score(action, c_explore=1.0):
     return exploit + explore
 ```
 
-### 3.3 MCTS Expansion
+### 3.3 Tree Expansion
 
-MCTS iterations within a single theorem are strictly sequential: each
+Tree-search iterations within a single theorem are strictly sequential: each
 iteration's UCB/LCB selection depends on backpropagation from the previous
 iteration. At expansion time, the policy samples N candidate tactics for the
 selected proof state. These N tactics form one Env Backend expansion item:
@@ -1368,7 +1379,9 @@ def extract_all_subproof_candidates(proof_tree: TacticNode) -> list[TrainingSamp
     return candidates
 ```
 
-Only verified HER samples enter `a_type_data` or policy/value training.
+When node-general HER lands, only independently verified HER samples enter
+`a_type_data`. Path-A policy/value rows are produced from accepted search steps,
+not from whole-proof HER rendering.
 
 ### 3.5 Value Function Data
 
@@ -1487,11 +1500,14 @@ budget on them.
 
 ## 3.6 Supported Search Algorithms
 
-LeanFoundry supports multiple search modes behind a common interface.
-MCGS is the flagship algorithm, but simpler algorithms are first-class
-because they are necessary for debugging, ablation, and reproducible
-evaluation. All modes use Kimina-MCTS for tactic execution and the
-`PolicyClient` protocol for model calls.
+LeanFoundry supports multiple search modes behind `SearchEngine` and
+`build_engine(config)`. The current code has two implemented wedges:
+direct whole-proof search (`DIRECT`, `SELF_CORRECT`) and AND/OR tree search
+(`TREE`, with pluggable PUCT and best-first selection strategies). Beam,
+optimistic/RMaxTS-style search, graph/MCGS, and richer HER remain future
+algorithms until replay/eval shows the simpler baselines are insufficient.
+All implemented modes use `EnvBackend` for Lean execution and `PolicyClient`
+for model calls; search code does not construct those clients.
 
 ### 1. Direct Whole-Proof Sampling
 
@@ -1509,16 +1525,7 @@ and revises for one or more rounds.
 Use cases: Goedel-style evaluation, self-correction SFT data generation,
 compiler-feedback training traces.
 
-### 3. Tactic Beam Search
-
-LeanFoundry maintains a beam of proof prefixes. At each step, the model
-proposes tactics, Kimina-MCTS executes them in batch, and the best
-resulting prefixes (by model score) are kept.
-
-Use cases: first tactic-level search baseline, debugging Kimina-MCTS
-stepping, simple trajectory generation without a value model.
-
-### 4. Best-First Search
+### 3. AND/OR Tree Search With Best-First Selection
 
 LeanFoundry expands the open leaf with the strongest implemented best-first
 score: value estimate when present, otherwise `best_first_missing_value_score`,
@@ -1528,68 +1535,62 @@ combine policy logprob, depth, and novelty.
 Use cases: value-model evaluation, search-efficiency baseline, stronger
 alternative to fixed-width beam search.
 
-### 5. PUCT Tree MCTS
+### 4. AND/OR Tree Search With PUCT Selection
 
-Standard tree MCTS over Lean proof states using PUCT selection. The
-policy model proposes tactics, the value model scores resulting states,
-and visit statistics guide future expansion.
+PUCT selection scores actions locally under the current root-to-leaf descent.
+For split actions, the engine attacks the hardest open child under the selected
+action. Value backup uses product over AND children and max over OR actions.
 
-Use cases: MCTS baseline before graph merging is added, policy/value
-integration tests, comparison against MCGS.
+Use cases: tree-search baseline before graph merging is added, policy/value
+integration tests, and solved@budget curves.
 
-### 6. Optimistic Search / RMaxTS-Style Search
+### 5. Tactic Beam Search (deferred)
 
-A search variant that adds optimism bonuses for underexplored states or
-actions, encouraging the model to discover proof paths it has not tried.
+Maintain a beam of proof prefixes and keep the best resulting prefixes by a
+future scoring rule. Deferred until the direct/tree baselines and eval runners
+make the comparison meaningful.
 
-Use cases: sparse-reward exploration, training-time proof discovery,
-comparison to DeepSeek-Prover-V1.5's RMaxTS variant.
+### 6. Optimistic Search / RMaxTS-Style Search (deferred)
 
-### 7. MCGS: Monte Carlo Graph Search
+Add optimism bonuses for underexplored states or actions. Deferred until the
+baseline tree path has durable replay/eval and real trace evidence.
 
-The flagship search mode. After the state-equivalence gate passes, validated equivalent proof states are merged into a graph rather than treated as separate
-tree nodes. Tactic applications are hyperedges because one tactic may
-create multiple subgoals.
+### 7. MCGS: Monte Carlo Graph Search (deferred)
 
-Use cases: scalable training-time proof search after state-equivalence validation, Expert Iteration on hard
-theorems, Hindsight Experience Replay extraction, value-label generation.
+Graph search requires a complete Lean state-identity fingerprint before states
+reached by different paths can be merged soundly. Until that gate passes, v0
+search is tree search and does not merge states.
 
-### 8. AND/OR MCGS
+### 8. AND/OR MCGS (deferred)
 
-The full Aristotle-style search mode. A proof state is solved if ANY
-tactic solves it (OR node). A tactic succeeds only if ALL child states
-are solved (AND node). Selection prioritizes the best action by UCB and
-then attacks its hardest child by lower confidence bound.
-
-Use cases: hard theorem proving, long proof discovery, training data
-beyond what direct sampling can reach.
+The full Aristotle-style graph algorithm combines OR-over-actions,
+AND-over-subgoals, graph merging, hardest-child prioritization, HER, and value
+labels. LeanFoundry keeps this as the north-star reference, not the current
+implemented contract.
 
 ---
 
 ## 3.7 Search Implementation Roadmap
 
 ```
-v0.1  (validation milestone)
+current baseline
   direct whole-proof sampling
   self-correction loop
+  AND/OR tree search with PUCT selection
+  AND/OR tree search with best-first selection
+  Path-A policy/value extraction and SQLite replay store
+
+next core work
+  env-profile ingress policy
+  eval runners and benchmark/env-profile manifests
+  policy history/comment API contract
+  DISPROVED semantics before enabling try_negation
+
+later algorithms
   tactic beam search
-  best-first search
-  Kimina/Pantograph state-token backend validated
-
-v0.2  (MCTS baseline)
-  PUCT tree MCTS
   optimistic / RMaxTS-style search
-  value function integration
-
-v0.3  (flagship search)
-  validated MCGS state merging (graph-merge-off ablation required)
-  AND/OR MCGS with hardest-child priority
-  HER extraction and value-label generation
-
-v0.4  (scale-out)
-  distributed router (Extension A)
-  cluster-scale search execution
-  multi-region failover
+  validated MCGS state merging
+  AND/OR MCGS with node-general HER
 ```
 
 ---
@@ -1598,24 +1599,25 @@ v0.4  (scale-out)
 
 ### 4.1 A-Type Data (Theorem + Verified Proof)
 
-Used for SFT. Must have a verified proof in a known env_profile.
+Used for whole-proof SFT artifacts. A row enters this table only when a
+complete rendered proof passed final `/exec/verify` in a known `env_profile`.
+Path-A per-state policy/value rows do not require a whole-proof render and are
+stored separately.
 
 ```sql
 CREATE TABLE a_type_data (
-  id TEXT PRIMARY KEY,
-  theorem_id TEXT REFERENCES theorems(id),
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
   env_profile TEXT NOT NULL,
   header TEXT NOT NULL,
   lean_proof TEXT NOT NULL,
   proof_hash TEXT NOT NULL,
   verified_by_backend BOOLEAN NOT NULL DEFAULT TRUE,
-  -- SFT format fields
-  proof_type TEXT,           -- 'whole_proof', 'tactic_sequence', 'self_correction'
-  tactic_sequence TEXT,      -- JSON list of (state, tactic) pairs
-  correction_input TEXT,     -- for self-correction format: failed proof + errors
-  source TEXT NOT NULL,      -- 'leandojo', 'mathlib', 'goedel_verified',
-                             --   'deepseek_verified', 'mcts_found', 'search_found'
-  model_version INTEGER,     -- which training iteration found this (if search)
+  proof_type TEXT,
+  tactic_sequence TEXT,
+  correction_input TEXT,
+  source TEXT NOT NULL,
+  model_version INTEGER,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -1626,59 +1628,88 @@ Used for Expert Iteration and GRPO. The model finds the proof.
 
 ```sql
 CREATE TABLE theorems (
-  id TEXT PRIMARY KEY,
-  lean_statement TEXT NOT NULL,
-  informal_statement TEXT,       -- source natural language, if available
-  env_profile TEXT NOT NULL,
+  id TEXT PRIMARY KEY NOT NULL,
+  lean_statement TEXT NOT NULL CHECK (length(lean_statement) >= 1),
+  informal_statement TEXT,
+  env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
   header TEXT NOT NULL,
-  difficulty_estimate REAL,      -- from quick-sample (see Stage 2)
-  pass_rate_current REAL,        -- updated each EI iteration
+  initial_lean_block TEXT,
+  difficulty_estimate REAL,
+  pass_rate_current REAL,
   pass_rate_updated_at TIMESTAMP,
-  source TEXT NOT NULL,          -- 'leandojo', 'minif2f', 'autoformalized',
-                                 --   'math', 'amc', 'aime', 'numina'
-                                 -- provenance; propagated into TheoremSpec.source
-                                 --   and gates try_negation (see G5 / §3.5.1)
-  split TEXT DEFAULT 'train',    -- 'train', 'val', 'test'
+  source TEXT NOT NULL DEFAULT 'unknown' CHECK (length(source) >= 1),
+  split TEXT NOT NULL DEFAULT 'train',
   added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+`source` is the provenance label propagated into `TheoremSpec.source`; it is
+the future gate for `try_negation` (§3.5.1).
 
 ### 4.3 Trajectories (Replay Buffer)
 
 ```sql
 CREATE TABLE trajectories (
-  id TEXT PRIMARY KEY,
-  theorem_id TEXT REFERENCES theorems(id),
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
   env_profile TEXT NOT NULL,
-  proof_type TEXT NOT NULL,        -- 'whole_proof', 'mcts_search'
-  whole_proof TEXT,                -- final verified Lean proof (rendered_lean)
-  tactic_sequence TEXT,            -- JSON: serialized TacticNode tree (NOT a flat list)
-                                   -- Tree required: AND-split proofs have branching structure
-                                   -- Flat traversal yields (state, tactic) pairs for SFT
-                                   -- Any proved subtree is a HER candidate
-                                   -- See concern G3
-  search_budget_used INTEGER,      -- total tactics tried during search
-  is_subproof BOOLEAN DEFAULT FALSE, -- TRUE if from HER extraction
-  parent_trajectory_id TEXT,       -- if subproof, parent's id
+  proof_type TEXT NOT NULL,
+  whole_proof TEXT,
+  tactic_sequence TEXT,
+  search_budget_used INTEGER,
+  is_subproof BOOLEAN NOT NULL DEFAULT FALSE,
+  parent_trajectory_id TEXT,
   model_version INTEGER NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+```
 
-CREATE TABLE state_value_labels (
-  id TEXT PRIMARY KEY,
+`tactic_sequence` stores serialized `ProofTree` JSON for the solved projection,
+not the live AND/OR runtime tree. `whole_proof` is nullable because Path-A
+attempts can emit per-state training data even when Path-B rendering or final
+verification fails.
+
+Positive Path-A policy rows are stored separately:
+
+```sql
+CREATE TABLE policy_examples (
+  id TEXT PRIMARY KEY NOT NULL,
   theorem_id TEXT REFERENCES theorems(id),
   env_profile TEXT NOT NULL,
   proof_state_hash TEXT NOT NULL,
   proof_state_pretty TEXT,
-  label INTEGER NOT NULL,          -- 1 = proved, 0 = negative
-  disproved BOOLEAN DEFAULT FALSE, -- TRUE = negation pruned (hard 0, full weight)
-                                   -- FALSE + label=0 = censored negative (reduced weight)
-                                   -- See concern G2
-  depth INTEGER,
-  tactics_tried_on_subtree INTEGER, -- for filtering low-effort censored negatives
-  model_version INTEGER NOT NULL
+  proof_prefix TEXT NOT NULL DEFAULT '',
+  tactic TEXT NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth >= 0),
+  model_version INTEGER,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+Value labels use the same replay provenance:
+
+```sql
+CREATE TABLE state_value_labels (
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT REFERENCES theorems(id),
+  env_profile TEXT NOT NULL,
+  proof_state_hash TEXT NOT NULL,
+  proof_state_pretty TEXT,
+  label INTEGER NOT NULL CHECK (label IN (0, 1)),
+  weight REAL NOT NULL DEFAULT 1.0 CHECK (weight >= 0),
+  disproved BOOLEAN NOT NULL DEFAULT FALSE,
+  depth INTEGER CHECK (depth IS NULL OR depth >= 0),
+  tactics_tried_on_subtree INTEGER CHECK (
+    tactics_tried_on_subtree IS NULL OR tactics_tried_on_subtree >= 0
+  ),
+  model_version INTEGER NOT NULL,
+  CHECK (NOT disproved OR (label = 0 AND weight = 1.0))
+);
+```
+
+`disproved=TRUE` is reserved for future semantic falsity certificates such as
+negation pruning. `label=0, disproved=FALSE` is a censored negative and carries
+a reduced `weight`.
 
 ### 4.4 Formalizer Output (B-Type Statements from Extension B)
 
@@ -1687,16 +1718,19 @@ and require additional vetting before entering the main theorems table:
 
 ```sql
 CREATE TABLE formal_statements_staging (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   informal_source TEXT,
   informal_statement TEXT,
-  lean_statement TEXT,
-  env_profile TEXT,
+  lean_statement TEXT NOT NULL,
+  env_profile TEXT NOT NULL,
   formalizer_version TEXT,
-  semantic_judge_score REAL,  -- LLM judge confidence (0-1)
-  syntax_checked BOOLEAN,     -- passed Kimina /verify (statement only)
+  semantic_judge_score REAL CHECK (
+    semantic_judge_score IS NULL
+    OR (semantic_judge_score >= 0 AND semantic_judge_score <= 1)
+  ),
+  syntax_checked BOOLEAN NOT NULL DEFAULT FALSE,
   dedup_hash TEXT,
-  promoted_to_theorems BOOLEAN DEFAULT FALSE
+  promoted_to_theorems BOOLEAN NOT NULL DEFAULT FALSE
 );
 ```
 
@@ -1812,7 +1846,7 @@ without relief.
 
 The likely concrete allocation after profiling is 8 GPUs for training
 updates (TP=4, PP=2 or TP=2, PP=4), with phase-separated rollout/search
-and update cycles for EI and MCTS-EI stages. The 6/2 co-located layout
+and update cycles for EI and search-based EI stages. The 6/2 co-located layout
 is tested for GRPO only if the fit gate passes with margin.
 
 ```
@@ -1904,7 +1938,7 @@ memory_dry_run:
     - stage1_sft_whole_proof
     - stage1_sft_tactic_policy
     - stage1_sft_self_correction
-    - stage3_mcts_tactic_policy
+    - stage3_search_tactic_policy
     - stage3_value_training
     - stage4_grpo_whole_proof
     - stage4_grpo_self_correction
@@ -1992,60 +2026,16 @@ after the model-state fit is resolved.
 
 ### 5.4 Slime Integration
 
-We use Slime (THUDM) as the RL training orchestrator because it provides
-native Megatron-LM + SGLang integration, automatic weight synchronization
-between training and inference GPUs, and a custom rollout interface.
+Slime (THUDM) is the intended online RL orchestrator for the training repo
+because it provides Megatron-LM + SGLang integration, weight synchronization,
+and a custom rollout interface. It is **not** part of the LeanFoundry core
+execution path. The dependency is available only through the CI-excluded
+`training` optional extra, and the in-repo `SlimeAdapter` remains a placeholder
+until a pinned Slime commit and compatibility tests are chosen.
 
-**Slime is a major dependency with active upstream development. Stability
-requires an explicit adapter strategy.**
-
-LeanFoundry never imports Slime directly. All Slime interaction goes
-through an `RLEngineBase` adapter:
-
-```python
-# leanfoundry/rl_engine/base.py — LeanFoundry's own interface
-class RLEngineBase(Protocol):
-    async def submit_samples(self, samples: list[TrainingSample]) -> None: ...
-    async def get_policy_client(self) -> PolicyClient: ...
-    async def current_checkpoint(self) -> str: ...
-    async def wait_for_update(self) -> Checkpoint: ...
-
-# leanfoundry/rl_engine/slime_adapter.py — only this file knows Slime
-class SlimeAdapter(RLEngineBase):
-    """Adapter for Slime pinned at commit abc1234 (update on PR only)."""
-    ...
-```
-
-Dependency management rules:
-
-```
-1. Pin Slime to a commit hash, not a branch:
-   slime @ git+https://github.com/THUDM/slime@<commit>
-
-2. CI runs only against the pinned version.
-   Any Slime upgrade is an explicit PR with adapter compatibility tests.
-
-3. Compatibility test suite in tests/rl_engine/test_slime_adapter.py:
-   - sample submission
-   - weight sync (Megatron → SGLang)
-   - PolicyClient construction
-   These tests fail immediately on breaking upstream changes.
-
-4. SlimeAdapter uses only three Slime capabilities:
-   - custom rollout registration
-   - weight synchronization trigger
-   - training step invocation
-   It does not use Slime's internal data structures.
-
-5. MockRLEngine exists for unit tests, proving the interface is
-   Slime-agnostic and that LeanFoundry can run without Slime.
-```
-
-If Slime's direction becomes incompatible, forking at the pinned commit
-is the fallback. The adapter layer limits the blast radius to one file.
-
-Custom rollout registration is training-repo pseudocode. It must use
-LeanFoundry abstractions, not raw Kimina/SGLang URLs. In current Slime, the
+The source-level integration shape is pull, not push. Slime loads a rollout
+function and calls it each rollout iteration; LeanFoundry does not stream
+samples into Slime's buffer through `RLEngineBase.submit_samples(...)`. The
 clean hook for theorem proving is the full rollout function:
 
 ```text
@@ -2060,33 +2050,25 @@ one `Sample` would recreate the forbidden flattening problem. Mapping one full
 theorem search to one `Sample` is possible for a prototype, but it makes env
 batching across proof graphs and trajectory extraction awkward.
 
-The full rollout function owns the theorem-search orchestration:
+That function returns `list[list[Sample]]` groups to Slime. LeanFoundry's role
+inside it is algorithm-neutral search and optional durable side-write to the
+SQLite `ReplayStore`; Slime owns the online data buffer and trainer. The full
+rollout function owns the theorem-search orchestration:
 
 ```python
 # training_repo/rollouts/lean_rollout.py
-from slime.rollout.base_types import RolloutFnTrainOutput
-from slime.utils.async_utils import run
 from leanfoundry.env_backend import make_env_backend
-from proofsearch import SearchConfig, run_search_batch, samples_from_search_results
+from leanfoundry.proofsearch import SearchConfig, run_search_batch
 from training_repo.policy import SlimePolicyClient
+from training_repo.samples import samples_from_search_results
 
-def generate_rollout(args, rollout_id, data_source, evaluation=False):
-    return run(generate_rollout_async(args, rollout_id, data_source, evaluation))
+async def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
+    theorem_groups = data_buffer.get_samples(args.rollout_batch_size)
 
-async def generate_rollout_async(args, rollout_id, data_source, evaluation=False):
-    # Slime supplies theorem tasks as Sample groups.
-    # The Lean statement / theorem metadata lives in Sample.prompt or Sample.metadata.
-    theorem_groups = data_source.get_samples(args.rollout_batch_size)
-
-    # The training repo sees an EnvBackend interface. The current implementation
-    # may wrap lean_client.AsyncLeanExecEnv internally, but this rollout code
-    # does not import lean_client and does not know about server internals.
     env = await make_env_backend(args.env_backend_config)
-    policy = SlimePolicyClient(args)  # wraps Slime-owned SGLang router
+    policy = SlimePolicyClient(args)
     search_cfg = SearchConfig.from_args(args)
 
-    # run_search_batch may execute many theorem/proof-graph searches concurrently.
-    # Its EnvClient batches proof-state expansion items into /exec/step_batch.
     search_results = await run_search_batch(
         theorem_groups=theorem_groups,
         policy=policy,
@@ -2096,14 +2078,14 @@ async def generate_rollout_async(args, rollout_id, data_source, evaluation=False
     )
 
     samples = samples_from_search_results(search_results)
-    return RolloutFnTrainOutput(samples=samples, metrics=collect_rollout_metrics(search_results))
+    return samples
 ```
 
-This gives the training repo enough control to implement whole-proof GRPO,
-Expert Iteration, MCGS, theorem decomposition, TTT-style loops, or GRPO over
-multiple decompositions of one theorem. Slime still owns the trainer,
-Megatron/SGLang weight sync, SGLang serving, sample grouping, and conversion
-to training batches.
+`Sample` can represent either Path-A formulation: one Markovian row per node
+(`prompt=state`, `response=tactic`) or a history-conditional trajectory where
+the prompt includes `proof_prefix` and the loss mask trains only model-authored
+tactic spans. Grouping for EI vs GRPO is a training-side decision; core
+extraction keeps emitting algorithm-neutral `TrainingArtifacts`.
 
 ---
 
@@ -2131,7 +2113,7 @@ to training batches.
   │  Stage 2: Whole-proof Expert Iteration                          │
   │                                                                 │
   │  B-type train theorems ──► Inference Engine (sample N proofs)   │
-  │       ──► Env Backend /verify ──► pass-rate bucketing           │
+  │       ──► Env Backend /exec/verify ──► pass-rate bucketing      │
   │                                                                 │
   │       pass_rate = 0        → Stage 3 queue                      │
   │       0 < pass_rate ≤ 0.75 → active EI → A-type                 │
@@ -2147,9 +2129,9 @@ to training batches.
   │  B-type (pass_rate=0) ──► Search Engine                         │
   │       ├── PolicyClient → Inference Engine (sample_tactics)      │
   │       ├── /exec/step_batch → Env Backend (tactic execution)     │
-  │       └── verified HER extraction → A-type + value labels       │
+  │       └── Path-A extraction → policy/value rows + replay        │
   │                                                                 │
-  │  New A-type (policy + value labels) → Trainer → checkpoint v3   │
+  │  Policy/value rows → Trainer; verified whole proofs → A-type    │
   └────────────────────────────┬────────────────────────────────────┘
                                │ checkpoint v3
                                ▼
@@ -2158,7 +2140,7 @@ to training batches.
   │                                                                 │
   │  B-type (0 < pass_rate ≤ 0.75) ──► LeanRollout                  │
   │       ├── Inference Engine: sample G proofs per theorem         │
-  │       └── Env Backend /verify: binary reward                    │
+  │       └── Env Backend /exec/verify: binary reward               │
   │                                                                 │
   │  (theorem, rollouts, rewards) → Trainer (GRPO)                  │
   │  Multi-task: whole-proof + self-correction                      │
@@ -2175,11 +2157,11 @@ our env_profile and pass contamination filtering before entering training.
 
 ```
 A-type data = theorem + verified proof  → used for SFT
-B-type data = theorem statement only    → used for EI, MCTS, GRPO
+B-type data = theorem statement only    → used for EI, search, GRPO
 
 The training pipeline converts B into A:
   search finds a proof for a B-type theorem
-  Kimina verifies the proof
+  Env Backend /exec/verify accepts the rendered whole proof
   the (theorem, proof) pair becomes A-type data
   → added to replay buffer for future SFT rounds
 ```
@@ -2195,7 +2177,7 @@ Optional training-repo warm-start source:
   LeanTree factorized proof-tree dataset, if selected by training repo
     - tactic-policy SFT from factorized states and next tactic edges
     - value/critic warm-start from proof_depth/proof_size
-    - validation traces replayed through Kimina-MCTS before use
+    - validation traces replayed through Env Backend before use
 
 Supplementary (re-verify under our env_profile before use):
   Goedel-Prover SFT data (1.79M samples)    best available A-type source
@@ -2206,7 +2188,7 @@ Self-correction examples:
     1. Sample failed proof attempts for known theorems
     2. Run Kimina, collect Lean error messages
     3. Ask teacher to produce corrected proof
-    4. Kimina verifies corrected proof
+    4. Env Backend /exec/verify accepts corrected proof
     5. (statement, failed_proof, errors, corrected_proof) is one sample
 
 NOTE: any data not verified under our env_profile must be re-verified.
@@ -2241,18 +2223,21 @@ Quick-sampling for difficulty estimation:
   Runs at start of each EI iteration to update pass_rate_current
 ```
 
-### Stage 3 Data (B-type, MCTS EI)
+### Stage 3 Data (B-type, Search-Based EI)
 
 ```
 Input: Stage 2's pass_rate = 0 theorem pool
   + any B-type theorems from Extension B (when active)
 
-MCTS output becomes A-type training data:
-  successful root proof     → whole_proof SFT sample
-  each (state, tactic) pair → tactic-policy SFT sample
+Current Path-A output:
+  proved tactic edge        → policy_examples row (state + proof_prefix + tactic)
+  explored state            → value label when label-emission mode owns it
+  rendered+verified proof   → optional whole_proof A-type sample
+  attempt                   → trajectory + replay diagnostics
+
+Deferred output:
   each verified proved subtree → HER subproof sample (subproof=TRUE)
-  all visited states        → value function labels
-  deeply-searched failures  → censored negative value labels (min 50 tactics tried)
+  node-general DISPROVED labels → full-weight value negatives
 ```
 
 ### Stage 4 Data (B-type, GRPO)
@@ -2340,12 +2325,12 @@ Each iteration:
 
 3. Full sampling
    For each frontier theorem: sample n=32 proofs via SGLang
-   Send to Kimina /verify in batch
+   Send to Env Backend /exec/verify in batch
    Collect all successful proofs
 
 4. Add to A-type data
    For each verified proof: insert into a_type_data with source='search_found'
-   Apply verified HER where context reification succeeds; add with subproof=TRUE
+   HER subproof extraction is deferred to the node-general HER slice
 
 5. Train
    Sample from full replay buffer (all A-type data, old and new)
@@ -2355,66 +2340,67 @@ Each iteration:
 6. Update model in SGLang
    Slime handles weight sync from Megatron to SGLang
 
-7. Collect pass_rate=0 theorems into MCTS queue for Stage 3
+7. Collect pass_rate=0 theorems into the search queue for Stage 3
 ```
 
 Run until frontier theorems are mostly cleared
 (pass_rate=0 pool stops growing, frontier shrinks).
 
-### Stage 3: MCTS Expert Iteration
+### Stage 3: Search-Based Expert Iteration
 
 **Purpose**: find proofs for theorems that whole-proof sampling cannot
 reach (pass_rate=0 from Stage 2). This is a training data generator,
 not an optional inference enhancement.
 
-MCTS during training finds proofs the model cannot generate directly,
-then trains the model on those proofs, enabling the next iteration's
-model to reach further. This is the core loop that Aristotle uses to
-push beyond what direct sampling can achieve.
+Tree search during training finds proof steps and sometimes whole proofs the
+model cannot generate directly, then trains the model on Path-A policy/value
+artifacts and verified whole-proof artifacts when available. Graph/MCGS and
+node-general HER are later upgrades to this loop, not prerequisites for the
+baseline.
 
 Each iteration:
 
 ```
-1. Take theorems from MCTS queue (Stage 2's pass_rate=0 pool)
+1. Take theorems from the search queue (Stage 2's pass_rate=0 pool)
 
-2. Run MCTS search for each theorem
+2. Run tree search for each theorem
    Budget: 500 tactics per theorem
    Use Env Backend /exec/step_batch with Pantograph state_tokens
    Simultaneously:
      policy calls  → SGLang (sample 8 tactics per state)
      value calls   → SGLang (estimate proof probability per state)
-     tactic exec   → Kimina-MCTS
+     tactic exec   → Env Backend
 
 3. Collect training data from search
-   Successful proofs: whole_proof A-type sample
-   (state, tactic) pairs: tactic-policy A-type sample
-   HER subproofs: additional A-type samples
-   State labels: insert into state_value_labels
+   Proved tactic edges: insert into policy_examples
+   State labels: insert into state_value_labels when label mode owns them
+   Successful rendered+verified proofs: optional whole_proof A-type sample
+   HER subproofs: deferred until node-general extraction lands
 
 4. Train
-   Policy loss:       cross-entropy on (state, tactic) pairs
+   Policy loss:       cross-entropy on Path-A policy examples
    Value loss:        binary cross-entropy on state_value_labels
    Whole-proof loss:  cross-entropy on successful proof strings
    Combined: policy_loss + value_loss * 0.5
 
 5. Update model (Slime weight sync)
 
-6. Re-attempt theorems that MCTS just succeeded on with whole-proof
+6. Re-attempt theorems that search just succeeded on with whole-proof
    sampling — some may now be achievable directly (useful for Stage 4)
 ```
 
-Model averaging (after each MCTS training phase):
-If whole-proof pass@32 improves but pass@1 drops, or if MCTS proof
+Model averaging (after each search-training phase):
+If whole-proof pass@32 improves but pass@1 drops, or if search proof
 discovery rate per Lean call decreases, try:
 ```
-θ_avg = α * θ_mcts + (1-α) * θ_pre_mcts,  α ∈ {0.5, 0.7, 0.9}
-Select by: MCTS proofs found per 10k Lean calls
+θ_avg = α * θ_search + (1-α) * θ_pre_search,  α ∈ {0.5, 0.7, 0.9}
+Select by: search proofs found per 10k Lean calls
 ```
 Use averaging to preserve expansion diversity, not as a default step.
 
 ### Stage 4: GRPO
 
-**Purpose**: once MCTS has found proofs and trained the model on them,
+**Purpose**: once search has found proofs and trained the model on them,
 use online RL to sharpen the model's direct generation ability on
 theorems where it now has a nonzero success rate.
 
@@ -2422,7 +2408,7 @@ GRPO should NEVER run on theorems where the whole-proof pass rate is 0.
 The GRPO signal requires nonzero reward. The correct sequence is:
 
 ```
-MCTS finds proof for theorem T (Stage 3)
+Search finds proof for theorem T (Stage 3)
     ↓
 SFT on that proof trains the model (Stage 3)
     ↓
@@ -2438,8 +2424,8 @@ for batch in frontier_theorems(pass_rate_range=(0.05, 0.75)):
     # Sample G=8 whole proofs per theorem
     proofs = sglang.generate(batch, n=8, temperature=0.9)
 
-    # Verify all (in parallel via Kimina)
-    rewards = kimina.verify_batch(batch, proofs)
+    # Verify all through /exec/verify
+    rewards = env_backend.verify_batch(batch, proofs)
 
     # GRPO objective
     advantages = group_normalize(rewards)  # per-theorem normalization
@@ -2457,9 +2443,12 @@ for batch in frontier_theorems(pass_rate_range=(0.05, 0.75)):
     slime.sync_weights_to_sglang()
 ```
 
-Reward hacking guard (in Kimina /verify):
+Reward hacking guard:
 ```
-Reject proofs that contain:
+Reject proof-search tactics that contain:
+  sorry / admit tokens
+
+Reject final whole-proof artifacts that contain:
   sorry / sorryAx
   unauthorized axioms not in the approved Mathlib axiom set
   unsafe proof escapes (e.g. unsafeEval, Lean.ofScientific abuse)
@@ -2508,7 +2497,7 @@ Cycle:
 ```
 Search quality:
   proof_success_rate          % of theorems proved per EI iteration
-  mcts_proofs_per_10k_calls   efficiency of MCTS search
+  search_proofs_per_10k_calls efficiency of tree/search execution
   replay_buffer_size          total verified proofs in A-type store
   value_function_auc          AUC on state_value_labels held-out set
   her_candidate_multiplier    candidate HER samples / verified root proofs
@@ -2549,9 +2538,9 @@ LeanFoundry eval (infra repo owns):
   solved@budget curves — given a fixed model and fixed search algorithm,
     how many theorems are proved as tactic budget increases?
   proofs per 10k Lean calls — search efficiency across algorithm variants
-  MCTS compute curves — state-token load/tactic/save latency, cache hit rates
-  Search algorithm comparisons — direct vs beam vs MCGS vs AND/OR MCGS
-    run against the same model checkpoint
+  Search compute curves — state-token load/tactic/save latency, cache hit rates
+  Search algorithm comparisons — direct vs tree PUCT vs tree best-first now;
+    beam/MCGS variants later, all run against the same model checkpoint
   Infra throughput metrics — Kimina step/sec, queue wait, worker utilization
   Benchmark loaders, Kimina verification, eval artifact schemas
 
@@ -2622,7 +2611,7 @@ Primary final eval (reported in releases):
 
 Secondary final eval (aspirational, add as system matures):
   ProofNet (if compatible with our env_profile)
-  PutnamBench (after Stage 3 MCTS training)
+  PutnamBench (after Stage 3 search-based training)
   MathOlympiadBench (360 olympiad problems, Goedel-V2 released)
     → eval-only, never training data
     → re-verify all statements under our env_profile before use
@@ -2658,10 +2647,10 @@ When K_max > k, use unbiased estimator:
 pass_at_k = 1 - comb(n - c, k) / comb(n, k)
 ```
 
-### MCTS Compute Curves
+### Search Compute Curves
 
-For MCTS evaluation, pass@k is the wrong primary metric. MCTS uses
-Lean tactic calls as the budget, not samples. Report:
+For tree/search evaluation, pass@k is the wrong primary metric. Search uses
+Lean tactic calls as the budget, not proof samples. Report:
 
 ```
 Budgets: 50, 100, 250, 500, 1000, 2000 tactic calls
@@ -2677,7 +2666,7 @@ Metrics:
   value_calibration_ece     calibration error of value estimates
 ```
 
-These measure whether training-time MCTS is genuinely improving search
+These measure whether training-time search is genuinely improving search
 efficiency, which is the core infrastructure claim of this project.
 
 ### Progression Curves
@@ -2685,7 +2674,7 @@ efficiency, which is the core infrastructure claim of this project.
 LeanFoundry (infra repo) produces and owns:
 
 ```
-Curve 3: MCTS solved% vs tactic budget
+Curve 3: search solved% vs tactic budget
   x = budget (tactic calls), y = solved %
   one line per checkpoint (isolates search infrastructure contribution)
 
@@ -2698,7 +2687,7 @@ Training repo produces and owns (consuming infra eval artifact manifests):
 
 ```
 Curve 1: pass@1 and pass@32 across checkpoints
-  x = training stage (base → SFT → whole-EI → MCTS-EI → GRPO)
+  x = training stage (base → SFT → whole-EI → search-EI → GRPO)
   y = miniF2F test pass rate
 
 Curve 2: pass@k scaling per checkpoint
@@ -2708,13 +2697,13 @@ Curve 2: pass@k scaling per checkpoint
 Curve 4: frontier bucket evolution
   x = EI iteration
   y = count of theorems in:
-      pass_rate = 0 (MCTS queue)
+      pass_rate = 0 (search queue)
       0 < pass_rate <= 0.75 (active frontier)
       pass_rate > 0.75 (learned)
 
 Curve 5: data flywheel
   x = EI iteration
-  y = cumulative verified proofs, MCTS-found proofs, HER multiplier
+  y = cumulative verified proofs, search-found proofs, HER multiplier
 ```
 
 ### Evaluation Contamination Rules
@@ -2746,23 +2735,25 @@ commit. Silently produces training samples with invalid proofs.
 Mitigation: mandatory Kimina re-verification of ALL external A-type data
 under our env_profile before insertion. Reject without re-verification.
 
-**Risk: MCTS finds only trivial proofs**
-Replay buffer fills with easy verified HER subproofs. Model learns to prove
-easy lemmas and stops improving on harder ones.
+**Risk: Search finds only trivial proofs**
+Replay buffer fills with easy Path-A examples or future verified HER subproofs.
+Model learns to prove easy lemmas and stops improving on harder ones.
 Mitigation: track proof complexity (search_budget_used). Filter out
 trajectories with budget_used < 5 from tactic-policy training.
 Use pass_rate bucketing to avoid overtraining on easy theorems.
 
 **Risk: GRPO reward hacking**
 Model finds proofs with sorry or unauthorized axioms.
-Mitigation: Kimina /verify strips and rejects degenerate proofs.
+Mitigation: sorry/admit is rejected at expansion attach-time, and final
+`/exec/verify` rejects degenerate whole-proof artifacts.
 Reference policy KL penalty prevents policy collapse.
 
 **Risk: Weight sync stalls**
 Megatron→SGLang sync takes too long, GPU idle during sync.
 Mitigation: overlap sync with trajectory processing. During the ~10-30s
-sync window, search process can extract HER subproofs, compute state
-hashes, and write to SQLite. True idle time should be < 5s.
+sync window, search can extract Path-A rows, compute state hashes, and write to
+SQLite. Future HER extraction can use the same window. True idle time should be
+< 5s.
 
 **Risk: Env Backend worker pool exhausted**
 The profiled worker pool saturates and new tactic calls queue beyond the p95
@@ -2810,13 +2801,15 @@ Correct names in LeanFoundry source:   Incorrect (implementation leak):
   `server.main`, `PantographManager`, or worker classes appear in LeanFoundry.
   The current server is an app process launched by `python -m server` or by
   `lean_client.launch_server`.
-- `SGLang` does not appear in LeanFoundry at all. It is internal to
-  Slime and accessed through `PolicyClient` and `RLEngineBase`.
+- `SGLang` does not appear in LeanFoundry core. It is internal to the training
+  repo or a future optional adapter and is exposed to search only through
+  `PolicyClient`.
 - `MCTS` does not appear as a class name or endpoint name. The search
   algorithm type (MCGS, beam, direct) is a parameter to `SearchEngine`,
   not a hardcoded identity.
-- `Slime` appears only in `rl_engine/slime_adapter.py`. The rest of
-  LeanFoundry imports `RLEngineBase`.
+- `Slime` appears only in the optional `training` extra, docs, and the
+  placeholder `rl_engine/slime_adapter.py`. The landed Path-A core does not
+  import Slime.
 
 This allows swapping any implementation without changing the public API.
 
@@ -2865,25 +2858,29 @@ backend app process:
   lockfile, worker reuse, timeouts, and resource safety caps
 
 proofsearch/
-  MCGS / MCTS (AND/OR UCB, state canonicalization, gated graph merging)
-  HER extraction (TacticNode tree traversal)
-  EnvClient microbatcher: batches proof-state expansion items, never tactics
-  Value label extraction (proved / censored negative / disproved)
-  Proof rendering from tactic history
-  Negation pruning (try_negation flag, disabled by default — see concern G5)
+  SearchEngine protocol, build_engine(config), and SearchConfig
+  direct.py: direct whole-proof and completion-with-feedback search
+  and_or.py: AND/OR tree search with PUCT or best-first SelectionStrategy
+  expansion/backprop/lifecycle helpers for EnvBackend.step(), cleanup, cancel
+  Path-A extraction: policy_examples and value_labels from runtime tree
+  narrow optional proof rendering for direct/easy Path-B artifacts
+  deferred: graph/MCGS, node-general HER, negation pruning, richer rendering
 
 evals/
-  Benchmark loaders (LeanDojo, miniF2F, PutnamBench, MathOlympiadBench)
-  direct / self_correct / mcts eval runners
-  pass@k computation (biased and unbiased estimators)
-  MCTS budget curve generation
-  Eval artifact manifest writer
-  Report generation
+  Eval schemas and protocol stubs
+  deferred: benchmark loaders, direct/self-correct/tree eval runners,
+  pass@k, solved@budget curves, artifact manifests, report generation
 
 schemas/
-  SQL migrations (theorems, a_type_data, trajectories, state_value_labels)
+  SQL migrations (theorems, a_type_data, trajectories, policy_examples,
+  state_value_labels, formal_statements_staging)
   Pydantic models for all data types
   Eval artifact schema
+
+replay/
+  ReplayStore protocol
+  SQLiteReplayStore and deterministic row ids
+  writer for theorem, trajectory, policy, value, and A-type artifacts
 
 docker/
   Env Backend image (backend SHA + env_profile hash in tag)
@@ -2896,7 +2893,7 @@ docker/
 configs/
   stage1_sft.yaml
   stage2_whole_ei.yaml
-  stage3_mcts_ei.yaml
+  stage3_search_ei.yaml
   stage4_grpo.yaml
   eval_final.yaml
 
@@ -3098,7 +3095,7 @@ Training needs a globally consistent replay buffer.
        ┌───────────────┼───────────────┐
        │               │               │
   Search Node 1   Search Node 2   Search Node N
-  (MCTS, asyncio)  (MCTS, asyncio)  (MCTS, asyncio)
+  (search, asyncio) (search, asyncio) (search, asyncio)
        └───────────────┼───────────────┘
                        │  TCP
               ┌────────▼────────┐
@@ -3108,7 +3105,7 @@ Training needs a globally consistent replay buffer.
                        │
          ┌─────────────┼─────────────┐
     Lean Backend 1  Backend 2    Backend N
-    Kimina-MCTS     Kimina-MCTS  Kimina-MCTS
+    Env Backend     Env Backend  Env Backend
     (CPU-only,      (CPU-only,   (CPU-only,
      preemptible)    preemptible) preemptible)
 ```
@@ -3297,7 +3294,7 @@ The single-machine design was built to minimize migration friction:
 ```
 Single machine               Multi-machine equivalent
 ────────────────────────────────────────────────────
-Kimina-MCTS (localhost)  →   Kimina-MCTS pool behind REPL Router
+Env Backend (localhost)  →   Env Backend pool behind REPL Router
 Unix socket              →   TCP to router address
 SQLite                   →   PostgreSQL or Redis Streams
 SGLang (local)           →   SGLang cluster (Slime-managed)
@@ -3434,10 +3431,12 @@ found during inference for a specific hard problem, then re-runs search with
 the updated model. It is the highest-effort per-problem technique and most
 useful for olympiad-level targets where no standard training signal exists.
 
-LeanFoundry already has the components needed for TTT:
-- MCGS runtime to generate search traces on a target theorem
-- HER extraction to turn those traces into training samples
-- PolicyClient protocol to reload an updated model without restarting search
+TTT is blocked on components beyond the current Path-A baseline:
+- search traces rich enough for per-problem fine-tuning
+- node-general HER or another extraction path that can train from a target
+  theorem's local traces
+- a PolicyClient/model-adapter contract for loading an updated LoRA without
+  restarting the search loop
 
 TTT orchestration belongs in LeanFoundry (infra repo) because it is
 model-agnostic — the same loop works for any PolicyClient implementation.
@@ -3531,7 +3530,7 @@ but this requires the same provenance tracking as any external data.
 ## 25. Motivation and Relationship to the Core Pipeline
 
 Stages 2-4 are optimized for one thing: maximize solved@budget on the
-held-out splits, by any combination of whole-proof EI, MCTS EI, and GRPO,
+held-out splits, by any combination of whole-proof EI, search-based EI, and GRPO,
 with the frontier and exit criteria adapting to the live policy at every
 iteration. That design question is "how far can we go." It is deliberately
 not a controlled comparison — Stage 3's queue is defined as Stage 2's
@@ -3562,12 +3561,12 @@ Camp 2 — search-as-discovery-only:
   DeepSeek-Prover-V1.5's RMaxTS-for-data-collection role.
 
 Camp 3 — search-with-shaped-credit:
-  MCGS + value function + HER (Stage 3's own mechanics, §3.2-3.5),
-  where the tree structure itself produces additional training signal
-  beyond "proof found" — value labels on every searched state, HER
-  subproofs from unsolved roots. This is what Stage 3 already does by
-  default; Extension D evaluates it as one controlled arm among several
-  rather than as the production escalation tier.
+  MCGS/tree search + value function + HER-style auxiliary data, where
+  the search structure itself produces additional training signal beyond
+  "proof found" — value labels on searched states and, once implemented,
+  HER subproofs from unsolved roots. This is a future full arm; the current
+  production baseline has Path-A policy/value extraction but not graph/MCGS
+  or node-general HER.
 ```
 
 Camp 1 vs. Camp 2 isolates whether better proof *discovery* explains an
@@ -3612,7 +3611,7 @@ Arm W+SC    — Arm W, plus self-correction (Format 3: failed proof +
               Lean errors → revision). Still a flat outcome-only
               target. Camp 1, with one round of real compiler feedback.
 
-Arm S-disc  — MCGS search (§3.2-3.3) finds proofs per the frozen
+Arm S-disc  — Search (§3.2-3.3) finds proofs per the frozen
               curriculum; train ONLY on found whole-proof and
               tactic-sequence pairs. No value loss term. No HER
               extraction. Isolates discovery quality from shaped
@@ -3623,9 +3622,10 @@ Arm S-noval — Best-first search, no value model, ranking by policy
               learned value function specifically matters within
               search, independent of HER. Camp 2 variant.
 
-Arm S-full  — Full Stage 3 mechanics (§3.2-3.5): MCGS, value function,
-              HER, under the frozen curriculum instead of the dynamic
-              pass_rate=0 queue. Camp 3.
+Arm S-full  — Full shaped-credit mechanics (§3.2-3.5): graph/MCGS or
+              tree search, value function, and HER-style auxiliary data
+              under the frozen curriculum instead of the dynamic pass_rate=0
+              queue. Camp 3.
 ```
 
 Arms are seeded from the identical Stage 1 checkpoint. None of them
@@ -4040,9 +4040,9 @@ starts below the wrapper and turns each real initial state into one
 `ProofTree.roots` entry by pairing the state with its proved action.
 
 Three uses from one representation:
-- `rendered_lean`: Lean proof text for final verification
-- Depth-first traversal: flat `(state, tactic)` pairs for tactic-policy SFT
-- Any proved subtree: HER candidate (must pass Kimina re-verify)
+- `rendered_lean`: optional Path-B proof text for final verification
+- Depth-first traversal: Path-A policy examples with `proof_prefix`
+- Any proved subtree: future HER candidate (must pass `/exec/verify`)
 
 The tree structure is required to reconstruct Lean's branching syntax
 (`case inl =>`, `case inr =>`). LeanFoundry: stored as serialized TacticNode
