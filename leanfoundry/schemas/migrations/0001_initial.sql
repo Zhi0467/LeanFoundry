@@ -9,11 +9,11 @@
 CREATE TABLE theorems (
   id TEXT PRIMARY KEY NOT NULL,
   -- Lean theorem statement or declaration body submitted to search.
-  lean_statement TEXT NOT NULL,
+  lean_statement TEXT NOT NULL CHECK (length(lean_statement) >= 1),
   -- Optional natural-language statement paired with lean_statement.
   informal_statement TEXT,
   -- Pinned Lean/Mathlib environment. Do not mix env profiles in training.
-  env_profile TEXT NOT NULL,
+  env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
   -- Lean import/options header required to typecheck this theorem.
   header TEXT NOT NULL,
   -- Optional Lean block with sorry placeholders used as search roots.
@@ -24,7 +24,7 @@ CREATE TABLE theorems (
   pass_rate_current REAL,
   pass_rate_updated_at TIMESTAMP,
   -- Provenance label; also gates search behavior like negation pruning.
-  source TEXT NOT NULL DEFAULT 'unknown',
+  source TEXT NOT NULL DEFAULT 'unknown' CHECK (length(source) >= 1),
   -- Dataset split, usually train/val/test.
   split TEXT NOT NULL DEFAULT 'train',
   added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -72,7 +72,7 @@ CREATE TABLE policy_examples (
   proof_state_pretty TEXT,
   proof_prefix TEXT NOT NULL DEFAULT '',
   tactic TEXT NOT NULL,
-  depth INTEGER NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth >= 0),
   model_version INTEGER,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -92,8 +92,10 @@ CREATE TABLE state_value_labels (
   label INTEGER NOT NULL CHECK (label IN (0, 1)),
   weight REAL NOT NULL DEFAULT 1.0 CHECK (weight >= 0),
   disproved BOOLEAN NOT NULL DEFAULT FALSE,
-  depth INTEGER,
-  tactics_tried_on_subtree INTEGER,
+  depth INTEGER CHECK (depth IS NULL OR depth >= 0),
+  tactics_tried_on_subtree INTEGER CHECK (
+    tactics_tried_on_subtree IS NULL OR tactics_tried_on_subtree >= 0
+  ),
   model_version INTEGER NOT NULL,
   CHECK (NOT disproved OR (label = 0 AND weight = 1.0))
 );
@@ -106,7 +108,10 @@ CREATE TABLE formal_statements_staging (
   lean_statement TEXT NOT NULL,
   env_profile TEXT NOT NULL,
   formalizer_version TEXT,
-  semantic_judge_score REAL,
+  semantic_judge_score REAL CHECK (
+    semantic_judge_score IS NULL
+    OR (semantic_judge_score >= 0 AND semantic_judge_score <= 1)
+  ),
   syntax_checked BOOLEAN NOT NULL DEFAULT FALSE,
   dedup_hash TEXT,
   promoted_to_theorems BOOLEAN NOT NULL DEFAULT FALSE

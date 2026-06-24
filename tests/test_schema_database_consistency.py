@@ -1,6 +1,7 @@
 import sqlite3
+import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic.fields import FieldInfo
 
@@ -70,6 +71,81 @@ _SQL_DERIVED_NOT_NULL_COLUMNS: dict[str, set[str]] = {
     },
 }
 
+_EXTRA_SQL_COLUMN_AFFINITIES: dict[str, dict[str, str]] = {
+    "trajectories": {
+        "tactic_sequence": "TEXT",
+    },
+    "state_value_labels": {
+        "id": "TEXT",
+        "proof_state_pretty": "TEXT",
+    },
+    "policy_examples": {
+        "id": "TEXT",
+        "proof_state_hash": "TEXT",
+        "proof_state_pretty": "TEXT",
+        "created_at": "NUMERIC",
+    },
+}
+
+_TIMESTAMP_COLUMNS = {
+    "added_at",
+    "created_at",
+    "pass_rate_updated_at",
+}
+
+_VALID_SQL_ROWS: dict[str, dict[str, Any]] = {
+    "theorems": {
+        "id": "thm",
+        "lean_statement": "theorem t : True := by trivial",
+        "env_profile": "env",
+        "header": "",
+        "source": "test",
+    },
+    "formal_statements_staging": {
+        "id": "stmt",
+        "lean_statement": "theorem t : True := by trivial",
+        "env_profile": "env",
+    },
+    "policy_examples": {
+        "id": "policy",
+        "env_profile": "env",
+        "proof_state_hash": "state",
+        "proof_prefix": "",
+        "tactic": "trivial",
+        "depth": 0,
+    },
+    "state_value_labels": {
+        "id": "label",
+        "env_profile": "env",
+        "proof_state_hash": "state",
+        "label": 0,
+        "weight": 1.0,
+        "disproved": False,
+        "model_version": 0,
+    },
+}
+
+_SQL_CHECK_CASES: dict[str, list[tuple[str, Any]]] = {
+    "theorems": [
+        ("lean_statement", ""),
+        ("env_profile", ""),
+        ("source", ""),
+    ],
+    "formal_statements_staging": [
+        ("semantic_judge_score", -0.1),
+        ("semantic_judge_score", 1.1),
+    ],
+    "policy_examples": [
+        ("depth", -1),
+    ],
+    "state_value_labels": [
+        ("label", 2),
+        ("weight", -0.1),
+        ("depth", -1),
+        ("tactics_tried_on_subtree", -1),
+    ],
+}
+
 TABLE_MODELS: dict[str, type[Any]] = {
     "theorems": TheoremRecord,
     "a_type_data": ATypeDataRecord,
@@ -96,6 +172,19 @@ def _sql_column_info(
     }
 
 
+def _sqlite_affinity(sql_type: str) -> str:
+    normalized = sql_type.upper()
+    if "INT" in normalized:
+        return "INTEGER"
+    if any(fragment in normalized for fragment in ("CHAR", "CLOB", "TEXT")):
+        return "TEXT"
+    if "BLOB" in normalized or not normalized:
+        return "BLOB"
+    if any(fragment in normalized for fragment in ("REAL", "FLOA", "DOUB")):
+        return "REAL"
+    return "NUMERIC"
+
+
 def _apply_initial_migration() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.executescript(MIGRATION_PATH.read_text())
@@ -111,6 +200,60 @@ def _expected_columns(table: str, model: type[Any]) -> set[str]:
     fields -= _MODEL_FIELDS_NOT_IN_SQL.get(model, set())
     fields |= _EXTRA_SQL_COLUMNS.get(table, set())
     return fields
+
+
+def _expected_affinity(
+    table: str,
+    column: str,
+    model: type[Any],
+) -> str:
+    extra_affinity = _EXTRA_SQL_COLUMN_AFFINITIES.get(table, {}).get(column)
+    if extra_affinity is not None:
+        return extra_affinity
+    if column in _TIMESTAMP_COLUMNS:
+        return "NUMERIC"
+    field = model.model_fields[column]
+    annotation = _strip_optional(field.annotation)
+    origin = get_origin(annotation)
+    if origin is Literal:
+        literal_types = {type(value) for value in get_args(annotation)}
+        if literal_types == {int}:
+            return "INTEGER"
+    if annotation is bool:
+        return "NUMERIC"
+    if annotation is int:
+        return "INTEGER"
+    if annotation is float:
+        return "REAL"
+    if annotation is str:
+        return "TEXT"
+    raise AssertionError(
+        f"{table}.{column}: no SQL affinity mapping for {annotation!r}"
+    )
+
+
+def _strip_optional(annotation: object) -> object:
+    origin = get_origin(annotation)
+    if origin not in {types.UnionType, Union}:
+        return annotation
+    args = [arg for arg in get_args(annotation) if arg is not type(None)]
+    if len(args) == 1:
+        return args[0]
+    return annotation
+
+
+def _insert_row(
+    conn: sqlite3.Connection,
+    table: str,
+    row: dict[str, Any],
+) -> None:
+    columns = list(row)
+    placeholders = ", ".join("?" for _ in columns)
+    column_sql = ", ".join(columns)
+    conn.execute(
+        f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
+        tuple(row[column] for column in columns),
+    )
 
 
 def test_initial_migration_applies_and_columns_match_python_models() -> None:
@@ -153,6 +296,37 @@ def test_initial_migration_nullability_matches_python_models() -> None:
                     f"{table}.{column} has a non-null model default "
                     "but no SQL default"
                 )
+
+
+def test_initial_migration_type_affinity_matches_python_models() -> None:
+    conn = _apply_initial_migration()
+
+    for table, model in TABLE_MODELS.items():
+        sql_info = _sql_column_info(conn, table)
+        for column in _expected_columns(table, model):
+            expected_affinity = _expected_affinity(table, column, model)
+            actual_affinity = _sqlite_affinity(sql_info[column]["type"])
+            assert actual_affinity == expected_affinity, (
+                f"{table}.{column}: SQL affinity {actual_affinity!r} "
+                f"does not match {model.__name__} field "
+                f"{expected_affinity!r}"
+            )
+
+
+def test_initial_migration_checks_match_python_model_constraints() -> None:
+    for table, invalid_cases in _SQL_CHECK_CASES.items():
+        for column, invalid_value in invalid_cases:
+            conn = _apply_initial_migration()
+            row = dict(_VALID_SQL_ROWS[table])
+            row[column] = invalid_value
+            try:
+                _insert_row(conn, table, row)
+            except sqlite3.IntegrityError:
+                continue
+            raise AssertionError(
+                f"{table}.{column} accepted invalid value "
+                f"{invalid_value!r}"
+            )
 
 
 def _field_default_is_sql_not_null(field: FieldInfo) -> bool:

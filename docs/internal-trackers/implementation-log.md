@@ -434,3 +434,16 @@ Validation:
 
 Validation: docs-only; `git diff --check` included in the final verification
 for this checkpoint.
+
+## 2026-06-24: Schema consistency checks beyond column names
+
+- Expanded the SQL/Pydantic consistency guard to cover SQLite type affinity and
+  durable CHECK constraints, not just column names, nullability, and defaults.
+- Aligned the initial schema with locally enforceable Pydantic record
+  constraints: non-empty theorem statement, non-empty environment
+  profile/source, non-negative policy/value depths and effort, bounded staging
+  judge score, value-label domain, and disproved-negative invariants.
+- Added the same non-negative policy depth constraint to the incremental
+  `policy_examples` migration used by pre-Path-A databases.
+
+Validation: included in the next checkpoint verification.

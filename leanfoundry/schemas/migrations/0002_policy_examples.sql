@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS policy_examples (
   proof_state_pretty TEXT,
   proof_prefix TEXT NOT NULL DEFAULT '',
   tactic TEXT NOT NULL,
-  depth INTEGER NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth >= 0),
   model_version INTEGER,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

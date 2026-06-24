@@ -191,8 +191,6 @@ not repeated here.
 1. Core alignment (verifiable, clean durable schema)
    - Enforce env profiles: replace ambiguous defaults with a pinned profile or a
      required config path; validate header/hash/profile identity at data ingress.
-   - Expand schema-consistency tests beyond column names: nullability, defaults,
-     checks, type affinity vs the Pydantic source of truth.
    - Design-doc de-stale pass (separate): G1-G4, §2.8 `/verify`, §4 store
      examples, §10 `lean_client` boundary, §3.6 supported algorithms, Part II
      training scope, extension status wording.
