@@ -134,13 +134,10 @@ Status values:
 
 ### Search Behavior Gaps
 
-11. Selection semantics differ from §3.2 / Appendix A.
-    - Design describes global highest-UCB action selection plus LCB
-      hardest-child descent.
-    - Code performs local root-to-leaf PUCT descent and chooses the hardest
-      child by open-goal count, visits, and stable tie order.
-    - Decision needed: update design to make current v0 selection the contract,
-      or implement the global-action / LCB semantics.
+11. Selection semantics are aligned for v0.
+    - Resolved: §3.2 now documents the implemented local root-to-leaf PUCT
+      descent and structural hardest-child heuristic.
+    - Appendix A remains reference material for future graph/global variants.
 
 12. Policy prompt history/comment context is not represented at the API.
     - Design requires policy prompts to include full tactic history with inline
@@ -162,10 +159,9 @@ Status values:
     - Enum-only/future: tactic beam, optimistic/RMaxTS, MCGS, AND/OR MCGS.
     - Design currently says LeanFoundry "supports" all modes.
 
-15. Best-first design text is stale.
-    - Design says best-first combines policy logprob, value, depth, and novelty.
-    - Code uses leaf value estimate, configured missing-value score, goal count,
-      visits, and deterministic tie order.
+15. Best-first design text is aligned for v0.
+    - Resolved: the design now describes the implemented value/missing-score,
+      goal-count, visit, and deterministic tie-order heuristic.
 
 16. Negation pruning is scaffolded but not wired.
     - Code has `SearchConfig.try_negation`, provenance helper, and

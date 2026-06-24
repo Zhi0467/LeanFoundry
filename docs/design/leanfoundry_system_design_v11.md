@@ -1,6 +1,16 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.12 (2026-06-24):** Path-A core is now implemented end to end: schema,
+> sorry/admit rejection, render-free runtime extraction, SQLite replay store,
+> and driver wire-up. The top-level search result contract remains strict:
+> `SearchStatus.PROVED` means the optional rendered whole-proof artifact passed
+> final `/exec/verify`; per-node policy/value artifacts may still be emitted
+> from structurally solved runtime trees when rendering or verification fails.
+> The v0 tree selector is the implemented local root-to-leaf PUCT/hardest-child
+> descent; the global highest-UCB/LCB formulation remains reference material,
+> not the current contract.
+
 > **v11.11 (2026-06-24):** Contract 7 is updated for the Path-A training data
 > baseline. Per-node policy/value data is grounded by accepted `/exec` step
 > transitions and a sorry/admit rejection guard, not by whole-proof
@@ -208,18 +218,30 @@ This section is the live record of unresolved design decisions, empirical unknow
 
 ---
 
-### Confirmed Design Gaps (Need Implementation Before Use)
+### Resolved Baseline Gaps and Remaining Design Gaps
 
-**G1 — TheoremSpec.initial_lean_block is missing.**
-The current `TheoremSpec` has no field for a pre-built Lean code block with sorry placeholders. This field is required for any sorry-initialized search: lemma decomposition rollouts (training repo), hand-written proof sketches, and any future subgoal decomposition pattern. Without it, SearchEngine can only initialize from a single theorem statement. Fix: add `initial_lean_block: str | None` to LeanFoundry's `TheoremSpec`. When set, SearchEngine executes the block through the EnvBackend client, extracts all sorry goal states, and initializes MCGS from them as AND-hypergraph roots. Backwards-compatible; when None, behavior is unchanged.
+**G1 — TheoremSpec.initial_lean_block exists (resolved baseline).**
+`TheoremSpec.initial_lean_block: str | None` is now part of the in-memory
+theorem request and theorem table. When set, tree search initializes from that
+Lean block through `/exec/create_states`; when absent, it initializes from the
+single theorem statement as before. MCGS graph semantics remain deferred, but
+the sorry-initialized input surface is no longer missing.
 
-**G2 — state_value_labels does not distinguish disproved from censored negative.**
-A state marked DISPROVED via negation pruning is definitively mathematically false — label=0 at full weight. A state searched but not proved is a censored negative — reduced weight because "not found by this policy" is not the same as false. The current schema has one `label` field with a single comment. Fix: add `disproved BOOLEAN DEFAULT FALSE`; update value training to assign full weight to disproved states and reduced weight to censored states.
+**G2 — state_value_labels distinguishes disproved from censored negative (resolved baseline).**
+`ValueLabel` and `state_value_labels` now carry both `weight` and `disproved`.
+A state marked DISPROVED via future negation pruning is definitively
+mathematically false — label=0 at full weight. A state searched but not proved
+is a censored negative — reduced weight because "not found by this policy" is
+not the same as false.
 
-This is a *representation* gap, not a reward-shaping choice. The value model is trained supervised on `(label, weight)` pairs; with a single `label` field, the disproved-vs-censored distinction is destroyed at write time and is unrecoverable from the durable spine (P3). The actual *weight* given to a censored negative (0.25?) is a separate, tunable shaping question tracked in R3 — but no weighting scheme can be applied later unless the `disproved` bit was recorded when the label was written. G2 is the structural prerequisite; R3 is the downstream knob.
+The remaining open question is not representation; it is the downstream
+reward-shaping knob for censored negatives (R3).
 
-**G3 — tactic_sequence in trajectories is a flat list, but AND-split proofs are trees.**
-After a `cases` or `constructor` tactic producing multiple subgoals, the proof is a branching tree. A flat list of `(state, tactic)` pairs cannot represent this structure and cannot reconstruct Lean's branching syntax (`case inl =>`, `case inr =>`). The canonical representation must be a `TacticNode` tree:
+**G3 — trajectory tactic_sequence stores the solved tree projection (resolved baseline).**
+After a `cases` or `constructor` tactic producing multiple subgoals, the proof
+is a branching tree. A flat list of `(state, tactic)` pairs cannot represent
+this structure and cannot reconstruct Lean's branching syntax. LeanFoundry now
+uses a `TacticNode` tree projection for solved proof slices:
 ```python
 @dataclass
 class TacticNode:
@@ -227,7 +249,9 @@ class TacticNode:
     tactic: str
     children: list["TacticNode"]  # AND-children after split; single child for linear step
 ```
-Depth-first traversal yields flat `(state, tactic)` pairs for policy SFT. Any proved subtree is a HER candidate. `rendered_lean` reconstructed from tactic history is the canonical text for final verification. Fix: update `trajectories.tactic_sequence` to store a serialized `TacticNode` tree; update HER extraction and policy SFT data generation to use tree traversal.
+Depth-first traversal yields flat `(state, tactic)` pairs for policy SFT. Any
+proved subtree is a future HER candidate. `rendered_lean` is optional Path-B
+artifact text for final verification, not a Path-A data gate.
 
 This does **not** mean maintaining a second live structure in parallel with the search graph. There are two distinct structures with two distinct lifetimes, and both are custom (no off-the-shelf library provides them):
 
@@ -235,7 +259,8 @@ This does **not** mean maintaining a second live structure in parallel with the 
 
 2. **The serialized `TacticNode` tree** — a *projection* extracted from the solved slice of the search graph at data-emission time, then written to `trajectories.tactic_sequence`. It is trivially custom (the 3-field dataclass above). A tree, not the graph, because (a) rendering to Lean text is inherently tree-shaped (`case inl => … case inr => …`), and (b) HER's "every proved *subtree* is a candidate" is only well-defined on a tree — a merged DAG node has several parents and no unambiguous subtree.
 
-So G3 is: one extraction/unfold pass from graph → tree at write time, plus changing the schema field from a lossy flat list to the serialized tree. The flat list is only adequate for purely linear proofs; the first goal-splitting tactic breaks it.
+The remaining extraction work is node-general HER and richer Path-B rendering;
+the baseline durable representation is no longer a flat list.
 
 **G4 — Inline comments must be preserved in tactic SFT data.**
 Aristotle's policy generates (hidden CoT) + (inline comment) + (tactic). Inline comments persist in the action history and serve as external persistent memory — future calls to the policy see the earlier reasoning context embedded in the proof. If SFT data strips comments from action strings, the model never learns to produce them and loses this mechanism. Fix: ensure the action string recorded in trajectories includes the full text the model generated, comments included. The prompt builder in the training repo must reconstruct the full prefix including comments for policy training.
@@ -1235,27 +1260,22 @@ Integration path:
 
 ### 3.2 AND/OR UCB Selection
 
-Standard MCTS uses UCB to select nodes. Proof search has AND/OR
-structure that changes the priority:
+The v0 implementation uses local root-to-leaf PUCT descent over the AND/OR tree.
+At an OR state, PUCT chooses one action using prior, value, visits, and
+`puct_exploration_weight`; at an AND action, search descends into the hardest
+open child using the implemented structural heuristic (more open goals, fewer
+visits, then stable order). The older global highest-UCB plus LCB-hardest-child
+formulation is reference material, not the current contract.
 
 ```python
 def select(tree: SearchGraph) -> FactorizedProofState:
-    # Step 1: find action with highest UCB among all actions
-    best_action = max(
-        tree.all_actions(),
-        key=lambda a: a.ucb_score(c_explore=1.0)
-    )
-
-    # Step 2: among states that action produces,
-    # focus on the HARDEST (lowest lower confidence bound)
-    # Rationale: an AND-node is only proved when ALL children are proved.
-    # Attack the bottleneck.
-    target_state = min(
-        best_action.child_states,
-        key=lambda s: s.lower_confidence_bound()
-    )
-
-    return target_state
+    node = tree.root
+    while node.is_expanded:
+        action = best_puct_action(node)
+        if not action.children:
+            return node
+        node = hardest_open_child(action)
+    return node
 
 def ucb_score(action, c_explore=1.0):
     exploit = action.value_estimate
@@ -1500,9 +1520,10 @@ stepping, simple trajectory generation without a value model.
 
 ### 4. Best-First Search
 
-LeanFoundry maintains a global priority queue of proof states and expands
-the most promising state according to a combined score of policy logprob,
-value estimate, depth, and novelty.
+LeanFoundry expands the open leaf with the strongest implemented best-first
+score: value estimate when present, otherwise `best_first_missing_value_score`,
+then fewer open goals, fewer visits, and stable order. It does not currently
+combine policy logprob, depth, and novelty.
 
 Use cases: value-model evaluation, search-efficiency baseline, stronger
 alternative to fixed-width beam search.
@@ -4035,7 +4056,7 @@ Three label types:
 
 | State | Label | Weight | `disproved` |
 |-------|-------|--------|-------------|
-| On verified proved path in proof tree | 1 | 1.0 | False |
+| On accepted-step proved Path-A path | 1 | 1.0 | False |
 | Negation proved (DISPROVED) | 0 | 1.0 | True |
 | Searched but not proved, ≥50 tactics tried | 0 | 0.25* | False |
 
@@ -4051,9 +4072,10 @@ to confidently label as negative.
 
 Root-outcome interpretation:
 
-- `PROVED` is only training evidence after the extracted `rendered_lean` passes
-  final `/exec/verify`. Before that, it is a structural closure of the runtime
-  tree, not an accepted proof.
+- Runtime structural `PROVED` states can emit Path-A policy/value training data
+  after accepted `/exec` steps and the sorry/admit guard. Top-level
+  `SearchStatus.PROVED` and whole-proof artifacts still require the extracted
+  `rendered_lean` to pass final `/exec/verify`.
 - `DISPROVED` means a negation search proved falsity for the state being
   disproved. The original state receives a full-weight value-negative label.
   The tactics inside the negation proof can be positive policy data for the

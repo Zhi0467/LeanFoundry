@@ -215,14 +215,10 @@ not repeated here.
      failures are swallowed without a runner event.
 
 4. Search semantics + policy context
-   - Make local root-to-leaf PUCT + hardest-child the documented v0 baseline;
-     defer global highest-UCB action plus LCB hardest-child.
    - Policy history/comment contract (#12): let tactic history + inline comments
      reach `PolicyClient.sample_tactics(...)` without stuffing
      `FactorizedProofState`. This is the inference-time side of the Path-A
      `proof_prefix` (history-conditional formulation).
-   - Reconcile best-first design text with the implemented
-     value/missing-score/goal-count/visit heuristic.
 
 5. Extraction hardening (after the Path-A baseline)
    - `DISPROVED` semantics (gate before `try_negation`): map a disproved root to

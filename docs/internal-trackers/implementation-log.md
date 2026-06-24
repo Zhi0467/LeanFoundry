@@ -416,3 +416,21 @@ Validation:
 - `uv run --no-dev --with flake8 flake8 leanfoundry/replay
   leanfoundry/proofsearch tests/test_replay_store.py tests/test_search_engines.py
   tests/test_expansion.py` passed.
+
+## 2026-06-24: Design de-stale pass after Path-A
+
+- Added a v11.12 design note recording that Path-A core is implemented and that
+  top-level `SearchStatus.PROVED` remains final-verify accepted, while Path-A
+  policy/value artifacts are per-step grounded.
+- Marked the `initial_lean_block`, value-label representation, and
+  `TacticNode` trajectory gaps as resolved baseline work.
+- Updated §3.2 to make local root-to-leaf PUCT plus the implemented
+  hardest-child heuristic the v0 contract, with global highest-UCB/LCB left as
+  reference/future material.
+- Updated the best-first section to match the implemented
+  value/missing-score/goal-count/visit/stable-order heuristic.
+- Updated Appendix A value-label wording so accepted-step Path-A training data
+  is distinct from top-level whole-proof verification acceptance.
+
+Validation: docs-only; `git diff --check` included in the final verification
+for this checkpoint.
