@@ -200,7 +200,10 @@ Status values:
 20. Slime integration is placeholder-only in this repo.
     - Design says "we use Slime" and specifies dependency/test behavior.
     - Code has `RLEngineBase` and `SlimeAdapter`, but every SlimeAdapter method
-      raises `NotImplementedError`; `pyproject.toml` has no Slime dependency.
+      raises `NotImplementedError`.
+    - `pyproject.toml` now exposes Slime only through the CI-excluded
+      `training` optional extra. The adapter still needs an explicit commit pin
+      and compatibility tests before it becomes an operational path.
 
 21. Policy/value API examples in §10 are stale.
     - Design puts `estimate_values(...)` on `PolicyClient` and shows

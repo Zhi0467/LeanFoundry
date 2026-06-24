@@ -24,6 +24,7 @@ def find_lean_token(
     index = 0
     block_comment_depth = 0
     in_string = False
+    in_interpolated_string = False
     in_line_comment = False
     ordered_tokens = sorted(tokens, key=len, reverse=True)
 
@@ -38,11 +39,16 @@ def find_lean_token(
             continue
 
         if in_string:
+            if in_interpolated_string:
+                match = _match_token_at(code, index, ordered_tokens)
+                if match is not None:
+                    return match
             if character == "\\":
                 index += 2
                 continue
             if character == "\"":
                 in_string = False
+                in_interpolated_string = False
             index += 1
             continue
 
@@ -68,18 +74,32 @@ def find_lean_token(
             continue
         if character == "\"":
             in_string = True
+            in_interpolated_string = (
+                index >= 2 and code[index - 2:index] == "s!"
+            )
             index += 1
             continue
 
-        for token in ordered_tokens:
-            end = index + len(token)
-            if code.startswith(token, index) and _is_token_boundary(
-                code,
-                index,
-                end,
-            ):
-                return token, index
+        match = _match_token_at(code, index, ordered_tokens)
+        if match is not None:
+            return match
         index += 1
+    return None
+
+
+def _match_token_at(
+    code: str,
+    index: int,
+    ordered_tokens: list[str],
+) -> tuple[str, int] | None:
+    for token in ordered_tokens:
+        end = index + len(token)
+        if code.startswith(token, index) and _is_token_boundary(
+            code,
+            index,
+            end,
+        ):
+            return token, index
     return None
 
 

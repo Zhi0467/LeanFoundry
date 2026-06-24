@@ -141,10 +141,9 @@ sorry (e.g. `native_decide`'s `ofReduceBool`) is out of scope; a `native_decide`
 proof is real, and `/exec/verify`'s `allowed_axioms` covers it for Path B.
 
 Storage (the durable buffer): concrete SQLite `ReplayStore` plus a writer that
-turns
-`TrainingArtifacts` into durable rows (policy examples, value labels, verified
-A-type proof rows, and one trajectory record) as attempts land. Deterministic
-content-hash ids make writes idempotent; rows keep provenance through
+turns `TrainingArtifacts` into durable rows (policy examples, value labels,
+verified A-type proof rows, and one trajectory record) as attempts land.
+Deterministic content-hash ids make writes idempotent; rows keep provenance through
 `attempt_id`-derived trajectory ids, `theorem_id`, and `model_version`. This
 durable store is a side archive for eval/HER/offline; it is NOT the online RL
 conduit (Slime owns that, below).
@@ -166,8 +165,8 @@ Slime adapter plan (read from THUDM/slime source; added as the CI-excluded
   `rollout_id`, generate fresh samples with current weights, train (GRPO/PPO via
   Megatron), sync weights to SGLang. So the existing
   `RLEngineBase.submit_samples(TrainingSample)` push contract is the wrong shape,
-  and `TrainingSample.whole_proof` (required) does not fit per-node data; reshape
-  the adapter around `generate_rollout`.
+  and the old `TrainingSample` push contract does not fit Slime's per-rollout
+  pull API; reshape the adapter around `generate_rollout`.
 - Boundary: core stays algorithm-neutral and writes the durable `ReplayStore`.
   The Slime adapter (`generate_rollout`, imports slime) decides grouping and
   builds `Sample`s. Our search is the rollout; one search execution yields many
@@ -180,8 +179,9 @@ Slime adapter plan (read from THUDM/slime source; added as the CI-excluded
 - Adapter steps: build a `PolicyClient` to Slime's SGLang endpoint from `args`;
   pull theorems; `run_search_batch`; algorithm-neutral extraction; convert to
   `Sample` groups; side-write the same artifacts to the durable `ReplayStore`;
-  return `list[list[Sample]]`. Deferred until Path-A core + store land and a
-  Slime version is pinned (#20).
+  return `list[list[Sample]]`. Path-A core/store is landed; the adapter remains
+  deferred until an explicit Slime commit pin and compatibility tests are chosen
+  (#20).
 
 ## Roadmap (after Path-A)
 
@@ -210,13 +210,9 @@ not repeated here.
      retry, search-state vs verifier work).
 
 3. Lifecycle hardening (remaining)
-   - Track all active backend item ids per attempt. Cancellation currently
-     covers only `search_item_id`; it must also cover the tree `verify_item_id`
-     and direct `verify_item_id:k`. A cancel failure during unwind is swallowed
-     without a runner event; give it an observable sink.
-   - Reject duplicate runner-provided `attempt_id` / `search_item_id` /
-     `verify_item_id` before launching attempts, with a test proving duplicates
-     fail before any backend call.
+   - Give cancel failures during unwind an observable sink. Cancellation is
+     currently best-effort and intentionally does not mask `CancelledError`, but
+     failures are swallowed without a runner event.
 
 4. Search semantics + policy context
    - Make local root-to-leaf PUCT + hardest-child the documented v0 baseline;

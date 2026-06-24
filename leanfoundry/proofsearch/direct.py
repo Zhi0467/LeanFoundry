@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.policy import PolicyClient, ValueClient
 from leanfoundry.proofsearch._common import (
@@ -16,6 +18,7 @@ from leanfoundry.proofsearch._direct_utils import (
     proof_tree_for_direct_candidate,
     single_proof_batch,
 )
+from leanfoundry.proofsearch._lifecycle import cancel_item_ids_best_effort
 from leanfoundry.proofsearch.base import (
     SearchAttemptContext,
     SearchConfig,
@@ -75,13 +78,23 @@ class DirectSearchEngine(SearchEngine):
                 break
             for candidate in candidates:
                 attempts_used += 1
-                verification = await env_backend.verify_one(
-                    attempt_context.direct_verify_item_id(attempts_used),
-                    candidate,
-                    theorem_name,
-                    allowed_axioms=theorem.allowed_axioms,
-                    env_profile=theorem.env_profile,
+                verify_item_id = attempt_context.direct_verify_item_id(
+                    attempts_used
                 )
+                try:
+                    verification = await env_backend.verify_one(
+                        verify_item_id,
+                        candidate,
+                        theorem_name,
+                        allowed_axioms=theorem.allowed_axioms,
+                        env_profile=theorem.env_profile,
+                    )
+                except asyncio.CancelledError:
+                    await cancel_item_ids_best_effort(
+                        env_backend,
+                        [verify_item_id],
+                    )
+                    raise
                 if verification.status == "accepted":
                     proof_tree = proof_tree_for_direct_candidate(
                         candidate,

@@ -43,6 +43,12 @@ async def verify_extracted_tree(
     diagnostics: dict[str, float | int | str] = {
         "verifier_status": verification.status
     }
+    if verification.status == "accepted":
+        status = SearchStatus.PROVED
+    elif verification.status == "cancelled":
+        status = SearchStatus.CANCELLED
+    else:
+        status = SearchStatus.ERROR
     if verification.status != "accepted":
         diagnostics["verifier_feedback"] = verifier_feedback(
             verification.status,
@@ -50,7 +56,7 @@ async def verify_extracted_tree(
         )
     return SearchResult(
         theorem_id=theorem.id,
-        status=SearchStatus.PROVED,
+        status=status,
         proof_tree=verified_tree,
         training_artifacts=artifacts,
         search_budget_used=tactic_calls_made,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
+from typing import ContextManager
 
 from leanfoundry.proofsearch.base import SearchResult
 from leanfoundry.replay.base import ReplayStore
@@ -50,53 +52,54 @@ async def persist_search_result(
     """Persist a theorem attempt and add write diagnostics to the result."""
 
     theorem_id = theorem.id or theorem_record_id(theorem)
-    await replay_store.put_theorem(_theorem_record(theorem, theorem_id))
+    async with _transaction_context(replay_store):
+        await replay_store.put_theorem(_theorem_record(theorem, theorem_id))
 
-    artifacts = result.training_artifacts
-    policy_examples: list[PolicyExample] = []
-    value_labels: list[ValueLabel] = []
-    a_type_records: list[ATypeDataRecord] = []
-    if artifacts is not None:
-        policy_examples = [
-            _policy_example_for_store(
-                example,
-                theorem_id=theorem_id,
-                model_version=model_version,
-            )
-            for example in artifacts.policy_examples
-        ]
-        value_labels = [
-            _value_label_for_store(
-                label,
-                theorem_id=theorem_id,
-                model_version=model_version,
-            )
-            for label in artifacts.value_labels
-        ]
-        a_type_records = [
-            _a_type_record_for_proof_candidate(
-                theorem,
-                theorem_id=theorem_id,
-                rendered_lean=proof_tree.rendered_lean,
-                tactic_sequence=proof_tree.model_dump_json(),
-                model_version=model_version,
-            )
-            for proof_tree in artifacts.proof_candidates
-            if proof_tree.verified
-        ]
-    await replay_store.put_policy_examples(policy_examples)
-    await replay_store.put_value_labels(value_labels)
-    for record in a_type_records:
-        await replay_store.put_a_type_data(record)
+        artifacts = result.training_artifacts
+        policy_examples: list[PolicyExample] = []
+        value_labels: list[ValueLabel] = []
+        a_type_records: list[ATypeDataRecord] = []
+        if artifacts is not None:
+            policy_examples = [
+                _policy_example_for_store(
+                    example,
+                    theorem_id=theorem_id,
+                    model_version=model_version,
+                )
+                for example in artifacts.policy_examples
+            ]
+            value_labels = [
+                _value_label_for_store(
+                    label,
+                    theorem_id=theorem_id,
+                    model_version=model_version,
+                )
+                for label in artifacts.value_labels
+            ]
+            a_type_records = [
+                _a_type_record_for_proof_candidate(
+                    theorem,
+                    theorem_id=theorem_id,
+                    rendered_lean=proof_tree.rendered_lean,
+                    tactic_sequence=proof_tree.model_dump_json(),
+                    model_version=model_version,
+                )
+                for proof_tree in artifacts.proof_candidates
+                if proof_tree.verified
+            ]
+        await replay_store.put_policy_examples(policy_examples)
+        await replay_store.put_value_labels(value_labels)
+        for record in a_type_records:
+            await replay_store.put_a_type_data(record)
 
-    trajectory = _trajectory_record(
-        theorem,
-        result,
-        theorem_id=theorem_id,
-        model_version=model_version,
-        proof_type=proof_type,
-    )
-    await replay_store.put_trajectory(trajectory)
+        trajectory = _trajectory_record(
+            theorem,
+            result,
+            theorem_id=theorem_id,
+            model_version=model_version,
+            proof_type=proof_type,
+        )
+        await replay_store.put_trajectory(trajectory)
 
     report = ReplayWriteReport(
         theorem_id=theorem_id,
@@ -113,6 +116,26 @@ async def persist_search_result(
             "diagnostics": diagnostics,
         }
     )
+
+
+class _AsyncTransactionContext:
+    def __init__(self, context: ContextManager[None]) -> None:
+        self.context = context
+
+    async def __aenter__(self) -> None:
+        self.context.__enter__()
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool | None:
+        return self.context.__exit__(exc_type, exc, traceback)
+
+
+def _transaction_context(
+    replay_store: ReplayStore,
+) -> _AsyncTransactionContext:
+    transaction = getattr(replay_store, "transaction", None)
+    if transaction is None:
+        return _AsyncTransactionContext(nullcontext())
+    return _AsyncTransactionContext(transaction())
 
 
 def theorem_record_id(theorem: TheoremSpec) -> str:

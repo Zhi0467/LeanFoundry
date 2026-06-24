@@ -619,7 +619,7 @@ def test_tree_engine_rejects_split_coupled_multi_goal_extraction() -> None:
         )
     )
 
-    assert result.status is SearchStatus.PROVED
+    assert result.status is SearchStatus.ERROR
     assert result.proof_tree is None
     assert "multiple focused goals" in result.diagnostics["extraction_error"]
     assert result.diagnostics["proof_artifact_status"] == "rendering_failed"
@@ -675,7 +675,7 @@ def test_tree_engine_verify_rejection_keeps_path_a_artifacts() -> None:
         )
     )
 
-    assert result.status is SearchStatus.PROVED
+    assert result.status is SearchStatus.ERROR
     assert result.proof_tree is not None
     assert not result.proof_tree.verified
     assert result.training_artifacts is not None
@@ -686,6 +686,54 @@ def test_tree_engine_verify_rejection_keeps_path_a_artifacts() -> None:
     label = result.training_artifacts.value_labels[0]
     assert label.tactics_tried_on_subtree == 1
     assert result.training_artifacts.failures[0].kind == "verification"
+
+
+def test_tree_engine_initial_complete_emits_no_synthetic_rows() -> None:
+    class CompleteCreateEnv(FakeEnvBackend):
+        async def create_states(
+            self,
+            item_id: str,
+            code: str,
+            *,
+            env_profile: str | None = None,
+        ) -> ExecCreateStatesResponse:
+            self.create_calls.append((item_id, code))
+            self.events.append(("create", item_id))
+            return ExecCreateStatesResponse(
+                items=[
+                    ExecCreateStatesResult(
+                        item_id=item_id,
+                        status="complete",
+                        states=[],
+                    )
+                ]
+            )
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    env = CompleteCreateEnv()
+
+    result = asyncio.run(
+        engine.search(
+            theorem("theorem t : True := by\n  trivial"),
+            attempt_context=tree_attempt("initial-complete-attempt"),
+            policy_client=FakePolicyClient(tactic_batches=[]),
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.PROVED
+    assert result.training_artifacts is not None
+    assert result.training_artifacts.policy_examples == []
+    assert result.training_artifacts.value_labels == []
+    assert result.training_artifacts.proof_candidates
 
 
 def test_tree_engine_counts_proved_alternatives_from_one_expansion() -> None:
@@ -1012,6 +1060,27 @@ def test_run_search_batch_uses_runner_provided_direct_verify_ids() -> None:
     assert env.cleanup_calls == []
 
 
+def test_run_search_batch_rejects_duplicate_ids_before_backend() -> None:
+    env = FakeEnvBackend()
+
+    with pytest.raises(ValueError, match="duplicate attempt_id"):
+        asyncio.run(
+            run_search_batch(
+                [theorem(), theorem()],
+                policy_client=FakePolicyClient(),
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(algorithm=SearchAlgorithm.DIRECT),
+                attempt_contexts=[
+                    direct_attempt("dup"),
+                    direct_attempt("dup"),
+                ],
+            )
+        )
+
+    assert env.events == []
+
+
 def test_run_search_batch_persists_path_a_artifacts(tmp_path) -> None:
     db_path = tmp_path / "replay.db"
     store = SQLiteReplayStore(db_path)
@@ -1055,9 +1124,15 @@ def test_run_search_batch_persists_path_a_artifacts(tmp_path) -> None:
     assert result.diagnostics["replay_a_type_data"] == 1
 
     conn = sqlite3.connect(db_path)
-    assert conn.execute("SELECT COUNT(*) FROM theorems").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM trajectories").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM a_type_data").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM theorems WHERE added_at IS NOT NULL"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM trajectories WHERE created_at IS NOT NULL"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM a_type_data WHERE created_at IS NOT NULL"
+    ).fetchone()[0] == 1
     policy_row = conn.execute(
         """
         SELECT theorem_id, proof_prefix, tactic, model_version
@@ -1073,6 +1148,44 @@ def test_run_search_batch_persists_path_a_artifacts(tmp_path) -> None:
         """
     ).fetchone()
     assert value_row == ("thm", 1, 1.0, 1, 7)
+
+
+def test_run_search_batch_persists_runner_exception(tmp_path) -> None:
+    class RaisingPolicyClient(FakePolicyClient):
+        async def sample_proofs(
+            self,
+            prompts,
+            *,
+            n: int,
+            params=None,
+        ) -> list[list[str]]:
+            raise RuntimeError("policy unavailable")
+
+    db_path = tmp_path / "replay.db"
+    store = SQLiteReplayStore(db_path)
+
+    results = asyncio.run(
+        run_search_batch(
+            [theorem().model_copy(update={"id": "thm"})],
+            policy_client=RaisingPolicyClient(),
+            value_client=None,
+            env_backend=FakeEnvBackend(),
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.DIRECT,
+                max_direct_candidates=1,
+            ),
+            max_concurrent=1,
+            replay_store=store,
+        )
+    )
+    store.close()
+
+    result = results[0]
+    assert result.status is SearchStatus.ERROR
+    assert result.diagnostics["operational_status"] == "runner_exception"
+    assert result.diagnostics["replay_trajectories"] == 1
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM trajectories").fetchone()[0] == 1
 
 
 def test_tree_engine_retries_deferred_cleanup_after_verification() -> None:
@@ -1388,13 +1501,65 @@ def test_run_search_batch_cancel_calls_cancel_then_cleanup() -> None:
 
     env = asyncio.run(run_and_cancel())
 
-    assert env.cancel_calls == [["cancel-attempt:search"]]
+    assert env.cancel_calls == [
+        ["cancel-attempt:search", "cancel-attempt:verify"]
+    ]
     assert env.cleanup_calls == [
         ["cancel-attempt:search"],
         ["cancel-attempt:search"],
     ]
     assert env.events[-3:] == [
-        ("cancel", "cancel-attempt:search"),
+        ("cancel", "cancel-attempt:search,cancel-attempt:verify"),
         ("cleanup", "cancel-attempt:search"),
         ("cleanup", "cancel-attempt:search"),
     ]
+
+
+def test_direct_search_cancel_cancels_active_verify_item() -> None:
+    class BlockingVerifyEnv(FakeEnvBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.verify_started = asyncio.Event()
+
+        async def verify_one(
+            self,
+            item_id: str,
+            code: str,
+            theorem_name: str,
+            *,
+            allowed_axioms: list[str] | None = None,
+            env_profile: str | None = None,
+        ) -> ExecVerifyResult:
+            self.verify_calls.append((item_id, code, theorem_name))
+            self.events.append(("verify", item_id))
+            self.verify_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def run_and_cancel() -> BlockingVerifyEnv:
+        env = BlockingVerifyEnv()
+        task = asyncio.create_task(
+            run_search_batch(
+                [theorem()],
+                policy_client=FakePolicyClient(
+                    proof_batches=[["theorem t : True := by\n  trivial"]]
+                ),
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.DIRECT,
+                    max_direct_candidates=1,
+                ),
+                max_concurrent=1,
+                attempt_contexts=[direct_attempt("direct-cancel")],
+            )
+        )
+        await env.verify_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return env
+
+    env = asyncio.run(run_and_cancel())
+
+    assert env.cancel_calls == [["direct-cancel:verify:1"]]

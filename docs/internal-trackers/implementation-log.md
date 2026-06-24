@@ -385,3 +385,34 @@ Validation:
 - `uv run --no-dev --with flake8 flake8 leanfoundry/replay
   leanfoundry/proofsearch/driver.py tests/test_schema_database_consistency.py
   tests/test_search_engines.py` passed.
+
+## 2026-06-24: Subagent review fixes for Path-A and lifecycle
+
+- Restored the top-level result contract: tree-search `SearchStatus.PROVED`
+  again means the rendered whole-proof artifact passed final `/exec/verify`.
+  Rendering failures and verifier rejections now return ERROR/CANCELLED as
+  appropriate, while preserving Path-A policy/value artifacts and failure
+  diagnostics.
+- Made the placeholder guard conservative for interpolated strings such as
+  `s!"{(by sorry : Nat)}"`; exact `sorry`/`admit` tokens inside interpolated
+  strings now mark the action DEAD.
+- Prevented initially complete synthetic initialization from emitting synthetic
+  policy/value rows.
+- Added SQLite schema versioning plus `0002_policy_examples.sql` so existing
+  replay databases get the Path-A policy table.
+- Made one replay attempt write atomic, made theorem identity immutable on id
+  conflicts, let SQLite timestamp defaults fire, and persisted runner-level
+  exception results when replay is enabled.
+- Rejected duplicate runner-provided `attempt_id`, `search_item_id`, or
+  `verify_item_id` before backend calls.
+- Expanded cancellation coverage: tree cancellation now includes
+  `verify_item_id`, and direct search cancels the active `verify_item_id:k`
+  when cancellation lands during final verification.
+
+Validation:
+
+- `uv run --no-dev --with pytest pytest tests/test_replay_store.py
+  tests/test_search_engines.py tests/test_expansion.py` -> 46 passed.
+- `uv run --no-dev --with flake8 flake8 leanfoundry/replay
+  leanfoundry/proofsearch tests/test_replay_store.py tests/test_search_engines.py
+  tests/test_expansion.py` passed.

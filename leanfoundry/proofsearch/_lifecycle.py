@@ -92,15 +92,30 @@ async def cleanup_search_state(
     )
 
 
+async def cancel_item_ids_best_effort(
+    env_backend: EnvBackend,
+    item_ids: list[str],
+) -> None:
+    """Cancel explicit backend item ids, never raising on cancel failure."""
+
+    if not item_ids:
+        return
+    try:
+        await env_backend.cancel(_unique_item_ids(item_ids))
+    except Exception:
+        return
+
+
 async def cancel_search_state(
     env_backend: EnvBackend,
     context: SearchAttemptContext,
 ) -> ExecCancelResponse | None:
-    """Cancel in-flight backend work for the search-state item."""
+    """Cancel in-flight backend work for tree search and verifier items."""
 
-    if context.search_item_id is None:
+    item_ids = _attempt_cancel_item_ids(context)
+    if not item_ids:
         return None
-    return await env_backend.cancel([context.search_item_id])
+    return await env_backend.cancel(item_ids)
 
 
 async def cancel_search_state_best_effort(
@@ -120,6 +135,16 @@ async def cancel_search_state_best_effort(
         return
 
 
+def _attempt_cancel_item_ids(context: SearchAttemptContext) -> list[str]:
+    if context.search_item_id is None:
+        return []
+    return _unique_item_ids([context.search_item_id, context.verify_item_id])
+
+
+def _unique_item_ids(item_ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(item_ids))
+
+
 async def _sleep(seconds: float) -> None:
     if seconds > 0:
         await asyncio.sleep(seconds)
@@ -127,6 +152,7 @@ async def _sleep(seconds: float) -> None:
 
 __all__ = [
     "CleanupReport",
+    "cancel_item_ids_best_effort",
     "cancel_search_state",
     "cancel_search_state_best_effort",
     "cleanup_search_state",

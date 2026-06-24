@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from leanfoundry.replay.ids import stable_hash, stable_id
 from leanfoundry.schemas import (
@@ -21,6 +23,13 @@ MIGRATION_PATH = (
     / "migrations"
     / "0001_initial.sql"
 )
+POLICY_EXAMPLES_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "schemas"
+    / "migrations"
+    / "0002_policy_examples.sql"
+)
+SCHEMA_VERSION = 2
 
 
 class SQLiteReplayStore:
@@ -31,16 +40,56 @@ class SQLiteReplayStore:
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._apply_initial_migration_if_needed()
+        self._in_transaction = False
+        self._apply_migrations()
 
     def close(self) -> None:
         """Close the underlying SQLite connection."""
 
         self._conn.close()
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Run several store writes atomically."""
+
+        if self._in_transaction:
+            yield
+            return
+        self._conn.execute("BEGIN")
+        self._in_transaction = True
+        try:
+            yield
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        finally:
+            self._in_transaction = False
+
     async def put_theorem(self, theorem: TheoremRecord) -> None:
         """Insert or update one theorem statement."""
 
+        existing = await self.get_theorem(theorem.id)
+        if existing is not None:
+            _validate_theorem_identity(existing, theorem)
+            self._conn.execute(
+                """
+                UPDATE theorems
+                SET difficulty_estimate = ?,
+                    pass_rate_current = ?,
+                    pass_rate_updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    theorem.difficulty_estimate,
+                    theorem.pass_rate_current,
+                    theorem.pass_rate_updated_at,
+                    theorem.id,
+                ),
+            )
+            self._commit_if_needed()
+            return
         self._conn.execute(
             """
             INSERT INTO theorems (
@@ -48,18 +97,10 @@ class SQLiteReplayStore:
               initial_lean_block, difficulty_estimate, pass_rate_current,
               pass_rate_updated_at, source, split, added_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              lean_statement=excluded.lean_statement,
-              informal_statement=excluded.informal_statement,
-              env_profile=excluded.env_profile,
-              header=excluded.header,
-              initial_lean_block=excluded.initial_lean_block,
-              difficulty_estimate=excluded.difficulty_estimate,
-              pass_rate_current=excluded.pass_rate_current,
-              pass_rate_updated_at=excluded.pass_rate_updated_at,
-              source=excluded.source,
-              split=excluded.split
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              COALESCE(?, CURRENT_TIMESTAMP)
+            )
             """,
             (
                 theorem.id,
@@ -76,7 +117,7 @@ class SQLiteReplayStore:
                 theorem.added_at,
             ),
         )
-        self._conn.commit()
+        self._commit_if_needed()
 
     async def get_theorem(self, theorem_id: str) -> TheoremRecord | None:
         """Fetch one theorem statement by id."""
@@ -106,7 +147,10 @@ class SQLiteReplayStore:
               verified_by_backend, proof_type, tactic_sequence,
               correction_input, source, model_version, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              COALESCE(?, CURRENT_TIMESTAMP)
+            )
             """,
             (
                 sample.id,
@@ -124,7 +168,7 @@ class SQLiteReplayStore:
                 sample.created_at,
             ),
         )
-        self._conn.commit()
+        self._commit_if_needed()
 
     async def put_policy_examples(
         self,
@@ -143,7 +187,7 @@ class SQLiteReplayStore:
             """,
             rows,
         )
-        self._conn.commit()
+        self._commit_if_needed()
 
     async def put_trajectory(self, trajectory: TrajectoryRecord) -> None:
         """Insert one search trajectory."""
@@ -158,7 +202,10 @@ class SQLiteReplayStore:
               tactic_sequence, search_budget_used, is_subproof,
               parent_trajectory_id, model_version, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              COALESCE(?, CURRENT_TIMESTAMP)
+            )
             """,
             (
                 trajectory.id,
@@ -174,7 +221,7 @@ class SQLiteReplayStore:
                 trajectory.created_at,
             ),
         )
-        self._conn.commit()
+        self._commit_if_needed()
 
     async def put_value_labels(self, labels: Sequence[ValueLabel]) -> None:
         """Insert value labels extracted from search."""
@@ -191,9 +238,9 @@ class SQLiteReplayStore:
             """,
             rows,
         )
-        self._conn.commit()
+        self._commit_if_needed()
 
-    def _apply_initial_migration_if_needed(self) -> None:
+    def _apply_migrations(self) -> None:
         row = self._conn.execute(
             """
             SELECT name
@@ -201,10 +248,46 @@ class SQLiteReplayStore:
             WHERE type = 'table' AND name = 'theorems'
             """
         ).fetchone()
-        if row is not None:
+        if row is None:
+            self._conn.executescript(MIGRATION_PATH.read_text())
+            self._set_schema_version(SCHEMA_VERSION)
+            self._conn.commit()
             return
-        self._conn.executescript(MIGRATION_PATH.read_text())
-        self._conn.commit()
+        if self._schema_version() < 2:
+            migration = POLICY_EXAMPLES_MIGRATION_PATH.read_text()
+            self._conn.executescript(migration)
+            self._set_schema_version(2)
+            self._conn.commit()
+
+    def _schema_version(self) -> int:
+        row = self._conn.execute("PRAGMA user_version").fetchone()
+        return int(row[0])
+
+    def _set_schema_version(self, version: int) -> None:
+        self._conn.execute(f"PRAGMA user_version = {version}")
+
+    def _commit_if_needed(self) -> None:
+        if not self._in_transaction:
+            self._conn.commit()
+
+
+def _validate_theorem_identity(
+    existing: TheoremRecord,
+    incoming: TheoremRecord,
+) -> None:
+    identity_fields = (
+        "lean_statement",
+        "env_profile",
+        "header",
+        "initial_lean_block",
+        "source",
+    )
+    for field_name in identity_fields:
+        if getattr(existing, field_name) != getattr(incoming, field_name):
+            raise ValueError(
+                "theorem id collision with different identity field: "
+                f"{field_name}"
+            )
 
 
 def _policy_example_row(example: PolicyExample) -> tuple[object, ...]:

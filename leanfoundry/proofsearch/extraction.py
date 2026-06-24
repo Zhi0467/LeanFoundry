@@ -220,13 +220,21 @@ def _count_proved_alternatives(state_node: StateNode) -> int:
 
 def _real_initial_states(tree: SearchTree) -> list[StateNode]:
     initialization_action = tree.root.proved_action()
-    if initialization_action is None:
-        for action in tree.root.actions:
-            if action.children:
-                return action.children
+    if initialization_action is not None:
+        if (
+            initialization_action.tactic
+            == SYNTHETIC_INITIALIZATION_ACTION_TACTIC
+        ):
+            return list(initialization_action.children)
+        if initialization_action.children:
+            return initialization_action.children
         return [tree.root]
-    if initialization_action.children:
-        return initialization_action.children
+    for action in tree.root.actions:
+        if (
+            action.tactic == SYNTHETIC_INITIALIZATION_ACTION_TACTIC
+            or action.children
+        ):
+            return list(action.children)
     return [tree.root]
 
 

@@ -45,6 +45,8 @@ async def run_search_batch(
         theorems
     ):
         raise ValueError("attempt_contexts must match theorem count")
+    if attempt_contexts is not None:
+        _validate_unique_attempt_contexts(attempt_contexts)
     if max_concurrent is None:
         limits = await env_backend.limits()
         max_concurrent = max(1, limits.max_in_flight_exec_requests)
@@ -89,10 +91,18 @@ async def run_search_batch(
                 await cleanup_search_state(env_backend, attempt_context)
                 raise
             except Exception as error:
-                return _runner_error_result(
+                result = _runner_error_result(
                     theorem,
                     attempt_context,
                     error,
+                )
+                if replay_store is None:
+                    return result
+                return await _persist_result_best_effort(
+                    replay_store,
+                    theorem,
+                    result,
+                    model_version=model_version,
                 )
 
     # run_one defines per-theorem runner semantics: every theorem yields a
@@ -130,6 +140,20 @@ def _runner_error_result(
         ),
         attempt_context,
     )
+
+
+def _validate_unique_attempt_contexts(
+    attempt_contexts: Sequence[SearchAttemptContext],
+) -> None:
+    for field_name in ("attempt_id", "search_item_id", "verify_item_id"):
+        seen: set[str] = set()
+        for context in attempt_contexts:
+            value = getattr(context, field_name)
+            if value is None:
+                continue
+            if value in seen:
+                raise ValueError(f"duplicate {field_name}: {value}")
+            seen.add(value)
 
 
 async def _persist_result_best_effort(

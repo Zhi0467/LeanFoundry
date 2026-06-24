@@ -228,6 +228,7 @@ def test_expand_state_rejects_admit_but_ignores_comments_and_strings() -> None:
             "admit",
             "-- admit in a comment\ntrivial",
             "have s : String := \"sorry\"\ntrivial",
+            "have s : String := s!\"{(by sorry : Nat)}\"\ntrivial",
         ]
     )
     backend = FakeEnvBackend(
@@ -235,6 +236,7 @@ def test_expand_state_rejects_admit_but_ignores_comments_and_strings() -> None:
             node_id=tree.root.node_id,
             results=[
                 ExecStepResult(tactic="admit", status="complete"),
+                ExecStepResult(tactic="trivial", status="complete"),
                 ExecStepResult(tactic="trivial", status="complete"),
                 ExecStepResult(tactic="trivial", status="complete"),
             ],
@@ -247,7 +249,7 @@ def test_expand_state_rejects_admit_but_ignores_comments_and_strings() -> None:
             tree.root,
             policy_client=policy,
             env_backend=backend,
-            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=3),
+            config=SearchConfig(max_tactic_calls=5, tactics_per_expansion=4),
         )
     )
 
@@ -255,9 +257,13 @@ def test_expand_state_rejects_admit_but_ignores_comments_and_strings() -> None:
         ActionNodeStatus.DEAD,
         ActionNodeStatus.PROVED,
         ActionNodeStatus.PROVED,
+        ActionNodeStatus.DEAD,
     ]
     assert outcome.actions[0].failure_message == (
         "forbidden proof placeholder token: admit"
+    )
+    assert outcome.actions[3].failure_message == (
+        "forbidden proof placeholder token: sorry"
     )
     assert tree.root.status is StateNodeStatus.PROVED
 

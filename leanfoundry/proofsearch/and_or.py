@@ -174,7 +174,7 @@ class AndOrSearchEngine(SearchEngine):
                     return await finish(
                         SearchResult(
                             theorem_id=theorem.id,
-                            status=SearchStatus.PROVED,
+                            status=SearchStatus.ERROR,
                             training_artifacts=artifacts,
                             search_budget_used=tree.tactic_calls_made,
                             diagnostics={
