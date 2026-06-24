@@ -7,7 +7,7 @@
 
 -- B-type data: theorem statements that may or may not have known proofs.
 CREATE TABLE theorems (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   -- Lean theorem statement or declaration body submitted to search.
   lean_statement TEXT NOT NULL,
   -- Optional natural-language statement paired with lean_statement.
@@ -24,21 +24,21 @@ CREATE TABLE theorems (
   pass_rate_current REAL,
   pass_rate_updated_at TIMESTAMP,
   -- Provenance label; also gates search behavior like negation pruning.
-  source TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'unknown',
   -- Dataset split, usually train/val/test.
-  split TEXT DEFAULT 'train',
+  split TEXT NOT NULL DEFAULT 'train',
   added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- A-type data: theorem plus verified proof, ready for supervised training.
 CREATE TABLE a_type_data (
-  id TEXT PRIMARY KEY,
-  theorem_id TEXT REFERENCES theorems(id),
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
   env_profile TEXT NOT NULL,
   header TEXT NOT NULL,
   lean_proof TEXT NOT NULL,
   proof_hash TEXT NOT NULL,
-  verified_by_kimina BOOLEAN NOT NULL DEFAULT TRUE,
+  verified_by_backend BOOLEAN NOT NULL DEFAULT TRUE,
   proof_type TEXT,
   tactic_sequence TEXT,
   correction_input TEXT,
@@ -50,14 +50,14 @@ CREATE TABLE a_type_data (
 -- Search replay buffer. tactic_sequence stores a serialized proof tree, not
 -- the live AND/OR runtime graph.
 CREATE TABLE trajectories (
-  id TEXT PRIMARY KEY,
-  theorem_id TEXT REFERENCES theorems(id),
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
   env_profile TEXT NOT NULL,
   proof_type TEXT NOT NULL,
   whole_proof TEXT,
   tactic_sequence TEXT,
   search_budget_used INTEGER,
-  is_subproof BOOLEAN DEFAULT FALSE,
+  is_subproof BOOLEAN NOT NULL DEFAULT FALSE,
   parent_trajectory_id TEXT,
   model_version INTEGER NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -70,14 +70,14 @@ CREATE TABLE trajectories (
 -- label = 0 and disproved = FALSE means "searched but not proved"; this is a
 -- censored negative, so downstream value training should use a lower weight.
 CREATE TABLE state_value_labels (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   theorem_id TEXT REFERENCES theorems(id),
   env_profile TEXT NOT NULL,
   proof_state_hash TEXT NOT NULL,
   proof_state_pretty TEXT,
   label INTEGER NOT NULL CHECK (label IN (0, 1)),
   weight REAL NOT NULL DEFAULT 1.0 CHECK (weight >= 0),
-  disproved BOOLEAN DEFAULT FALSE,
+  disproved BOOLEAN NOT NULL DEFAULT FALSE,
   depth INTEGER,
   tactics_tried_on_subtree INTEGER,
   model_version INTEGER NOT NULL,
@@ -86,14 +86,14 @@ CREATE TABLE state_value_labels (
 
 -- Autoformalized statements sit here before promotion to theorems.
 CREATE TABLE formal_statements_staging (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY NOT NULL,
   informal_source TEXT,
   informal_statement TEXT,
-  lean_statement TEXT,
-  env_profile TEXT,
+  lean_statement TEXT NOT NULL,
+  env_profile TEXT NOT NULL,
   formalizer_version TEXT,
   semantic_judge_score REAL,
-  syntax_checked BOOLEAN,
+  syntax_checked BOOLEAN NOT NULL DEFAULT FALSE,
   dedup_hash TEXT,
-  promoted_to_theorems BOOLEAN DEFAULT FALSE
+  promoted_to_theorems BOOLEAN NOT NULL DEFAULT FALSE
 );

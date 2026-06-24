@@ -2,6 +2,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from pydantic.fields import FieldInfo
+
 from leanfoundry.proofsearch import SearchConfig
 from leanfoundry.schemas.records import (
     ATypeDataRecord,
@@ -47,6 +49,13 @@ _EXTRA_SQL_COLUMNS: dict[str, set[str]] = {
     },
 }
 
+_SQL_DERIVED_NOT_NULL_COLUMNS: dict[str, set[str]] = {
+    "state_value_labels": {
+        "id",  # assigned at insert
+        "proof_state_hash",  # derived from ValueLabel.state when omitted
+    },
+}
+
 TABLE_MODELS: dict[str, type[Any]] = {
     "theorems": TheoremRecord,
     "a_type_data": ATypeDataRecord,
@@ -56,6 +65,22 @@ TABLE_MODELS: dict[str, type[Any]] = {
 }
 
 
+def _sql_column_info(
+    conn: sqlite3.Connection,
+    table: str,
+) -> dict[str, dict[str, Any]]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {
+        row[1]: {
+            "type": row[2],
+            "notnull": bool(row[3]),
+            "default": row[4],
+            "primary_key": bool(row[5]),
+        }
+        for row in rows
+    }
+
+
 def _apply_initial_migration() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.executescript(MIGRATION_PATH.read_text())
@@ -63,8 +88,7 @@ def _apply_initial_migration() -> sqlite3.Connection:
 
 
 def _sql_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {row[1] for row in rows}
+    return set(_sql_column_info(conn, table))
 
 
 def _expected_columns(table: str, model: type[Any]) -> set[str]:
@@ -84,6 +108,43 @@ def test_initial_migration_applies_and_columns_match_python_models() -> None:
             f"{table}: SQL has {sql_cols - expected!r} not in model, "
             f"model has {expected - sql_cols!r} not in SQL"
         )
+
+
+def test_initial_migration_nullability_matches_python_models() -> None:
+    conn = _apply_initial_migration()
+
+    for table, model in TABLE_MODELS.items():
+        sql_info = _sql_column_info(conn, table)
+        derived_not_null = _SQL_DERIVED_NOT_NULL_COLUMNS.get(table, set())
+        for column in _expected_columns(table, model):
+            if column in _EXTRA_SQL_COLUMNS.get(table, set()):
+                continue
+            field = model.model_fields[column]
+            if field.is_required():
+                assert sql_info[column]["notnull"], (
+                    f"{table}.{column} is required by {model.__name__} "
+                    "but nullable in SQL"
+                )
+                continue
+            if column in derived_not_null:
+                assert sql_info[column]["notnull"]
+                continue
+            if _field_default_is_sql_not_null(field):
+                assert sql_info[column]["notnull"], (
+                    f"{table}.{column} has a non-null model default "
+                    "but is nullable in SQL"
+                )
+                assert sql_info[column]["default"] is not None, (
+                    f"{table}.{column} has a non-null model default "
+                    "but no SQL default"
+                )
+
+
+def _field_default_is_sql_not_null(field: FieldInfo) -> bool:
+    if field.is_required():
+        return False
+    default = field.get_default(call_default_factory=False)
+    return default is not None
 
 
 def test_state_value_labels_rejects_invalid_disproved_positive() -> None:
@@ -127,3 +188,34 @@ def test_search_config_exposes_design_derived_search_budget_fields() -> None:
     }:
         assert field_name in fields
         assert fields[field_name].description
+
+
+def test_policy_example_stores_markovian_and_prefix_formulations() -> None:
+    from leanfoundry.schemas import FactorizedProofState, GoalComponent
+    from leanfoundry.schemas.trajectory import PolicyExample
+
+    state = FactorizedProofState(
+        env_profile="env",
+        goal_components=[GoalComponent(target="True", pretty="|- True")],
+        pretty_state="|- True",
+        state_token="token",
+    )
+
+    example = PolicyExample(
+        state=state,
+        proof_prefix="constructor\nleft",
+        tactic="trivial",
+        env_profile="env",
+        depth=2,
+    )
+
+    assert example.state is state
+    assert example.proof_prefix == "constructor\nleft"
+    assert example.tactic == "trivial"
+
+
+def test_atype_data_uses_backend_neutral_verification_name() -> None:
+    fields = ATypeDataRecord.model_fields
+
+    assert "verified_by_backend" in fields
+    assert "verified_by_kimina" not in fields

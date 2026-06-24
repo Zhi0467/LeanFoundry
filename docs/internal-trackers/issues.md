@@ -34,7 +34,7 @@ Status values:
 | System Architecture | needs-both | module layout, replay/eval/rl_engine protocols | #5, #19, #23, #25, #30 | Single-machine diagram includes trainer/inference/data/eval pieces that are mostly protocols or training-repo work. |
 | Design Principles | needs-both | current code and trackers | #2, #5, #23, #30 | P3/P10 durable spine/preemptibility are design goals, not implemented guarantees. |
 | §1 Environment Profiles | needs-code | `EnvBackendConfig`, `EnvProfile`, theorem/artifact schemas | #2 | Replace ambiguous defaults; validate profile/header/hash identity. |
-| §2.1-2.7 Kimina `/exec` backend | needs-both | `EnvBackend` protocol, `KiminaEnvBackend`, missing local `lean-client` | #1, #7, #9, #31 | Client protocol exists; server mode/state store/scheduler behavior are not proven by this checkout. |
+| §2.1-2.7 Kimina `/exec` backend | needs-both | `EnvBackend` protocol, `KiminaEnvBackend`, remote `lean-client` lock | #7, #9, #31 | Client protocol exists; server mode/state store/scheduler behavior are not proven by this checkout. |
 | §2.8 Validation Harness | stale / needs-code | search verification paths, tests | #7, #31 | Use `/exec/verify`; build replay/latency/cache validation harness. |
 | §3.1-3.1.1 State structure / LeanTree | needs-design | `FactorizedProofState`, expansion split logic | #10 | Separate current minimal state schema from future LeanTree/MCGS identity research. |
 | §3.2 AND/OR UCB selection | needs-design | `_selection.py`, runtime-tree tests | #11 | Adopt current local PUCT/hardest-child as v0 or implement global-UCB/LCB later. |
@@ -44,7 +44,7 @@ Status values:
 | §3.5.1 Negation pruning | future-only / needs-code | config/provenance helper, expansion path | #16 | Keep default off; wire only after DISPROVED prep and trace evidence. |
 | §3.6 Supported algorithms | stale | `SearchAlgorithm`, `build_engine` | #14, #32 | Mark tactic beam, optimistic/RMaxTS, MCGS, AND/OR MCGS as enum-only/future. |
 | §3.7 Search roadmap | needs-design | implementation log, factory, TODO | #14, #19, #32 | Rebase roadmap around implemented direct/self-correct/tree wedges and deferred algorithms. |
-| §4.1 A-type data | needs-both | `ATypeDataRecord`, SQL migration | #3, #4, #8 | Fix SQL/model nullability and backend-neutral verification naming. |
+| §4.1 A-type data | needs-design | `ATypeDataRecord`, SQL migration | #3, #8 | Schema nullability and backend-neutral verification naming are fixed; design examples still need a de-stale pass. |
 | §4.2 B-type data | needs-code | `TheoremRecord`, SQL migration | #2, #3 | Tighten env/split/profile invariants before data ingress. |
 | §4.3 Trajectories/value labels | needs-code | `TrajectoryRecord`, `TrainingArtifacts`, SQL | #5, #8, #17, #33 | Add concrete store/writers and decide failure/eval/cleanup persistence. |
 | §4.4 Formalizer output | future-only / needs-code | staging schema only | #26 | Staging table exists; pipeline/promotion/dedup/judge absent. |
@@ -63,11 +63,11 @@ Status values:
 
 ### Core Verification And Data Spine
 
-1. Test/dev environment is not runnable in this checkout.
-   - Evidence: `pyproject.toml` and `uv.lock` point `lean-client` at
-     `../kimina-lean-server/packages/lean-client`, which is missing locally, so
-     `uv run --no-dev --with pytest pytest` fails before collection.
-   - Impact: backend-facing contracts cannot be verified in this workspace.
+1. Test/dev environment is runnable from the remote `lean-client` lock.
+   - Resolved: `pyproject.toml` and `uv.lock` now source `lean-client` from the
+     pinned GitHub repository instead of a missing sibling checkout.
+   - Current evidence: `uv run --no-dev --with pytest pytest` collects and
+     passes in this workspace.
 
 2. Environment profiles are under-enforced relative to the design.
    - Design says every Lean execution is tied to a pinned env profile with
@@ -77,20 +77,19 @@ Status values:
    - Impact: the current schema/config surface does not yet prevent accidental
      env-profile mixing.
 
-3. SQL/Pydantic consistency testing is too shallow for the stated contract.
+3. SQL/Pydantic consistency testing is still narrower than the full contract.
    - Repo guidance says Pydantic models are source of truth and SQL must match.
-   - Current test checks column names, not nullability, defaults, checks, or
-     types.
-   - Example: required `ATypeDataRecord.theorem_id` is nullable in SQL;
-     required `FormalStatementStagingRecord.lean_statement` / `env_profile` are
-     nullable in SQL.
+   - Resolved: the initial migration test now checks column presence,
+     nullability, and SQL defaults for direct model-backed fields, and the
+     concrete nullability examples found in the audit are fixed.
+   - Still open: checks and type affinity are not yet compared against Pydantic
+     constraints.
 
 4. Durable schema leaks a concrete backend name.
-   - `verified_by_kimina` appears in SQL and Pydantic data records.
-   - This conflicts with the boundary rule that concrete implementation names
-     stay behind the `EnvBackend` adapter boundary.
-   - Track whether to rename to backend-neutral language before the first
-     stable migration is treated as durable API.
+   - Resolved for the initial schema: the SQL and Pydantic data records now use
+     `verified_by_backend`.
+   - Keep future durable fields backend-neutral before treating migrations as a
+     stable API.
 
 5. Replay persistence is schema/protocol-only.
    - Migrations and `ReplayStore` protocol exist, but there is no concrete

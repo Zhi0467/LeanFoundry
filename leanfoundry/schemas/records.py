@@ -43,7 +43,7 @@ class ATypeDataRecord(LeanFoundryModel):
     header: str = Field(description="Lean header used with this proof.")
     lean_proof: str = Field(description="Complete verified Lean proof.")
     proof_hash: str = Field(description="Dedup hash of the proof text.")
-    verified_by_kimina: bool = Field(
+    verified_by_backend: bool = Field(
         default=True,
         description="Whether this proof passed the backend verifier.",
     )

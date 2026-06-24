@@ -314,3 +314,22 @@ Validation:
   passed.
 - `uv run --locked --no-dev --with mypy mypy leanfoundry/proofsearch` passed.
 - `git diff --check` passed.
+
+## 2026-06-24: Path-A schema baseline
+
+- Added `PolicyExample.proof_prefix` so one policy row carries both the
+  Markovian state and the history-conditional root-to-state tactic prefix.
+- Relaxed `TrainingSample.whole_proof` to optional because per-node Path-A data
+  does not require a rendered whole proof.
+- Renamed the durable A-type proof verification flag from `verified_by_kimina`
+  to backend-neutral `verified_by_backend` in Pydantic and SQL.
+- Tightened the initial-migration consistency tests beyond column presence:
+  required Pydantic fields must be non-null in SQL, non-null model defaults must
+  have SQL defaults, and store-derived required SQL fields are explicit.
+- Updated the design and tracker notes to record the Path-A contract: per-node
+  policy/value examples are grounded by accepted `/exec` steps plus the
+  sorry/admit guard, while final `/exec/verify` is an artifact gate and sampled
+  audit path rather than the training-data gate.
+
+Validation: `uv run --no-dev --with pytest pytest
+tests/test_schema_database_consistency.py` -> 6 passed.

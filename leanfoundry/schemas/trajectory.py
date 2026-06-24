@@ -60,7 +60,7 @@ class ProofTree(LeanFoundryModel):
 
 
 class TrainingSample(LeanFoundryModel):
-    """Verified sample emitted to SFT, EI, or RL training."""
+    """Sample emitted to SFT, EI, or RL training."""
 
     root_state: FactorizedProofState = Field(
         description="State used as the training sample root."
@@ -69,7 +69,10 @@ class TrainingSample(LeanFoundryModel):
         default=None,
         description="Tree proof for tactic training or HER, when available.",
     )
-    whole_proof: str = Field(description="Complete Lean proof text.")
+    whole_proof: str | None = Field(
+        default=None,
+        description="Complete Lean proof text, when available.",
+    )
     depth: int = Field(
         ge=0,
         description="Proof depth for this sample.",
@@ -85,12 +88,19 @@ class TrainingSample(LeanFoundryModel):
 
 
 class PolicyExample(LeanFoundryModel):
-    """Positive tactic-policy example extracted from verified proof data."""
+    """Positive tactic-policy example extracted from search data."""
 
     state: FactorizedProofState = Field(
         description="Proof state where the tactic was selected."
     )
-    tactic: str = Field(description="Verified tactic text.")
+    proof_prefix: str = Field(
+        default="",
+        description=(
+            "Root-to-state tactic prefix for history-conditional training. "
+            "Empty for a real initial state."
+        ),
+    )
+    tactic: str = Field(description="Proved tactic text.")
     theorem_id: str | None = Field(
         default=None,
         description="Source theorem id for this example, if available.",
@@ -130,7 +140,7 @@ class TrainingArtifacts(LeanFoundryModel):
     )
     policy_examples: list[PolicyExample] = Field(
         default_factory=list,
-        description="Positive policy examples gated by final verification.",
+        description="Positive policy examples grounded by accepted steps.",
     )
     value_labels: list[ValueLabel] = Field(
         default_factory=list,

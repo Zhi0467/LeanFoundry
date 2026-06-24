@@ -144,19 +144,16 @@ Storage (the durable buffer): concrete SQLite `ReplayStore` plus a writer that
 turns `TrainingArtifacts` into durable rows (policy examples, value labels,
 trajectory record) as attempts land. Deterministic content-hash ids for
 idempotent writes; keep-all-with-provenance (`attempt_id`, `model_version`),
-dedup at read time. Fix SQL/Pydantic nullability and rename `verified_by_kimina`
-before the schema is treated as stable. This durable store is a side archive for
-eval/HER/offline; it is NOT the online RL conduit (Slime owns that, below).
+dedup at read time. This durable store is a side archive for eval/HER/offline;
+it is NOT the online RL conduit (Slime owns that, below).
 
-Slices:
-1. Schema: add `PolicyExample.proof_prefix`; node-local value effort; SQL
-   nullability fixes; `verified_by_kimina` rename.
-2. Soundness + extraction: reject `sorry`/`admit` at expansion attach-time (dead
+Remaining slices:
+1. Soundness + extraction: reject `sorry`/`admit` at expansion attach-time (dead
    action, lexer token match); emit policy/value from the proved tree directly
    (Markovian + `proof_prefix`), decoupled from `/exec/verify`; root-path helper.
-3. Store: concrete SQLite `ReplayStore` + writer + deterministic ids;
+2. Store: concrete SQLite `ReplayStore` + writer + deterministic ids;
    stream-write per attempt.
-4. Wire-up: driver/runner persists artifacts; minimal solved/throughput counts.
+3. Wire-up: driver/runner persists artifacts; minimal solved/throughput counts.
 
 Decisions:
 - Policy target is the single proved `tactic` string (SFT / expert-iteration). A

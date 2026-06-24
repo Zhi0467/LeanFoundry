@@ -1,6 +1,16 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.11 (2026-06-24):** Contract 7 is updated for the Path-A training data
+> baseline. Per-node policy/value data is grounded by accepted `/exec` step
+> transitions and a sorry/admit rejection guard, not by whole-proof
+> `rendered_lean` verification. Final `/exec/verify` remains required for
+> optional whole-proof artifacts and sampled soundness audits. `PolicyExample`
+> carries both the Markovian `state` and a prompt-ready `proof_prefix` string;
+> whole-tree-to-surface rendering is not a training-data gate. The durable proof
+> verification flag is backend-neutral (`verified_by_backend`), not
+> kimina-named.
+
 > **v11.10 (2026-06-23):** The `lean-client` lock was refreshed to kimina
 > commit `310e6c13`. Kimina's dev server launch defaults now size worker count
 > from CPU and available memory, then derive in-flight and queued request caps
@@ -12,9 +22,11 @@
 > `max_overloaded_retries` and `overload_backoff_seconds` knobs; LeanFoundry
 > still has no search-loop overload retry. Training extraction now returns an
 > explicit `TrainingArtifacts` envelope with proof candidates, policy examples,
-> value labels, failures, and diagnostics. Proof/policy/proved-value artifacts
-> are gated on final `/exec/verify`; root-runtime-`OPEN` attempts become
-> top-level `EXHAUSTED` and may emit only effort-gated censored value labels.
+> value labels, failures, and diagnostics. That slice initially gated
+> proof/policy/proved-value artifacts on final `/exec/verify`; v11.11 supersedes
+> the policy/value part with the Path-A per-step data gate. Root-runtime-`OPEN`
+> attempts become top-level `EXHAUSTED` and may emit only effort-gated censored
+> value labels.
 > `SearchAttemptContext` is runner-owned and carries separate
 > `search_item_id`/`verify_item_id`; tree search cleans checked search state
 > after verification, while cancelled runner tasks cancel and retry cleanup for
@@ -1575,7 +1587,7 @@ CREATE TABLE a_type_data (
   header TEXT NOT NULL,
   lean_proof TEXT NOT NULL,
   proof_hash TEXT NOT NULL,
-  verified_by_kimina BOOLEAN NOT NULL DEFAULT TRUE,
+  verified_by_backend BOOLEAN NOT NULL DEFAULT TRUE,
   -- SFT format fields
   proof_type TEXT,           -- 'whole_proof', 'tactic_sequence', 'self_correction'
   tactic_sequence TEXT,      -- JSON list of (state, tactic) pairs
