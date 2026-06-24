@@ -1,6 +1,12 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.10 (2026-06-23):** The `lean-client` lock was refreshed to kimina
+> commit `310e6c13`. Kimina's dev server launch defaults now size worker count
+> from CPU and available memory, then derive in-flight and queued request caps
+> from that worker count. LeanFoundry must still treat `/exec/limits` as the
+> runtime truth and avoid duplicating launch-default arithmetic inside search.
+
 > **v11.9 (2026-06-21):** The first operational/extraction/lifecycle slice
 > landed. `EnvBackendConfig` forwards lean-client's existing
 > `max_overloaded_retries` and `overload_backoff_seconds` knobs; LeanFoundry
@@ -768,8 +774,10 @@ Rules:
   item's tactics.
 - Prewarm duplicate compatible workers only by configuration or background
   policy, not as a hidden side effect of one tactic batch.
-- Worker count is memory-budgeted and empirically profiled; Kimina's default
-  CPU-count heuristic is not enough for Mathlib-heavy Pantograph workers.
+- Worker count is memory-budgeted and empirically profiled. Kimina's dev
+  launcher now uses CPU plus available-memory defaults, but production
+  LeanFoundry runs should still profile and override these values explicitly
+  when needed.
 
 Kimina config knobs that become first-class training config:
 
@@ -782,8 +790,11 @@ env_backend:
   max_lean_processes_per_env_profile: ${profiled_worker_pool_size}
   recommended_items_per_step_batch: ${profiled_worker_pool_size}
   recommended_in_flight_step_batches: 8
-  max_in_flight_exec_requests: 8
-  max_queued_exec_requests: 32
+  # May be omitted for the server default:
+  # max_in_flight_exec_requests = min(workers, 8)
+  # max_queued_exec_requests = min(max_in_flight_exec_requests * 4, 32)
+  max_in_flight_exec_requests: ${profiled_or_server_default}
+  max_queued_exec_requests: ${profiled_or_server_default}
   max_state_store_bytes: 17179869184
   state_store_dir: "/dev/shm/leanfoundry-state"
   single_process: true
@@ -810,6 +821,7 @@ knows nothing about search structure beyond opaque `node_id` correlation.
 Advertises enforced caps and client recommendations. LeanFoundry should call
 this through `AsyncLeanExecBatcher.from_server_limits(env)` instead of hardcoding
 request width or in-flight count. The client refuses unbounded safety caps.
+Concrete values are server-returned; an 8-worker launch can look like:
 
 ```json
 {

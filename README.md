@@ -29,6 +29,23 @@ schemas. Kimina owns Lean execution through `lean-client`; training code should
 not import Lean server internals directly unless it is implementing a new
 backend adapter.
 
+Run the Lean execution server as a separate process. For local development, the
+published Docker image is the simplest path:
+
+```sh
+docker pull zzzzhi/kimina-lean-server:latest
+docker run --rm \
+  --name kimina-lean-server \
+  -p 8000:8000 \
+  zzzzhi/kimina-lean-server:latest
+
+curl -fsS http://127.0.0.1:8000/exec/limits
+```
+
+Use an immutable image tag from the kimina repo for reproducible jobs. The
+Python client below connects to that already-running server URL; it does not
+launch the server in-process.
+
 ```python
 from leanfoundry.env_backend import EnvBackendConfig
 from leanfoundry.env_backend.kimina_backend import KiminaEnvBackend

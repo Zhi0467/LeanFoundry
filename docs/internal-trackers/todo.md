@@ -217,24 +217,16 @@ Concrete mismatches and stale claims are tracked in [`issues.md`](issues.md).
      Part II training scope, and extension status wording.
 
 2. Lifecycle hardening
-   - Per-theorem failure isolation and best-effort cleanup/cancel that never
-     mask the primary outcome have landed (see implementation-log). Remaining:
+   - Landed: per-theorem failure isolation; best-effort cleanup/cancel that
+     never mask the primary outcome; the tree engine is total and returns ERROR
+     results carrying `cleanup_failed` plus accurate `cleanup_attempts` (see
+     implementation-log). Remaining:
    - Track all active backend item ids per attempt, not only the static
      `search_item_id`. Cancellation currently covers only tree search state; it
      must also cover the tree final `verify_item_id` and direct candidate
      verifier ids such as `verify_item_id:k`. While unwinding a cancellation
      there is no result to attach to, so a cancel failure is currently
      swallowed without a runner event; give it an observable sink.
-   - Preserve cleanup-failure diagnostics on unexpected tree exceptions that
-     are later wrapped by `run_search_batch(...)` as `runner_exception`. The
-     tree engine currently calls best-effort cleanup on the outer exception
-     path, but discards the returned `cleanup_failed` diagnostic before the
-     driver turns the original error into a `SearchResult`.
-   - Make cleanup diagnostics precise on transport/backend exceptions.
-     `cleanup_search_state_best_effort(...)` currently reports
-     `cleanup_attempts=cleanup_max_attempts` even when cleanup failed on the
-     first call; report actual attempted calls or add a distinct field for
-     planned retry capacity.
    - Reject duplicate runner-provided `attempt_id`, `search_item_id`, and
      `verify_item_id` values before launching concurrent attempts, with a test
      proving duplicate ids fail before any backend call.

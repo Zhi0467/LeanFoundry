@@ -232,12 +232,9 @@ re-reading the code; the rest of that section stays future work.
 
 Known residual (still in TODO): cancellation covers only `search_item_id`, not
 `verify_item_id`/`verify_item_id:k`, and a cancel failure during unwind is
-swallowed without a runner event. Cleanup failures on the tree engine's
-unexpected-exception path are also swallowed after preserving the primary
-exception, so a later `run_search_batch(...)` `runner_exception` result does not
-carry `cleanup_failed`. Cleanup diagnostics for transport/backend exceptions
-also overstate `cleanup_attempts` as `cleanup_max_attempts` even when cleanup
-failed on the first call.
+swallowed without a runner event. (The two cleanup-diagnostic residuals noted
+here — `cleanup_failed` dropped on the unexpected-exception path and overstated
+`cleanup_attempts` — were resolved in the next entry.)
 
 Validation: `uv run --no-dev --with pytest pytest` -> all pass; `flake8` clean;
 `mypy` clean on the touched modules; `git diff --check` clean.
@@ -263,4 +260,57 @@ Validation:
 - `uv run --isolated --locked --no-dev --with pytest pytest` passed: 66 tests.
 - `uv run --isolated --locked --no-dev --with flake8 flake8 leanfoundry tests`
   passed.
+- `git diff --check` passed.
+
+## 2026-06-23: Resolve lifecycle diagnostic residuals
+
+Closed the two cleanup-diagnostic residuals from the runner-isolation entry and
+tightened the engine contract so the fix is structural, not patched in.
+
+- `cleanup_search_state(...)` is now best-effort itself: a backend/transport
+  exception is captured into the returned `CleanupReport` as `failed` with the
+  actual attempt count, instead of raised. `cleanup_attempts` is now accurate on
+  failure (no longer overstated as `cleanup_max_attempts`), and the redundant
+  `cleanup_search_state_best_effort` wrapper was removed. `cleanup_failed`
+  appears in diagnostics only when cleanup actually failed.
+- The tree engine is now total: its unexpected-exception path returns an ERROR
+  `SearchResult` (`operational_status="unexpected_error"`, the primary
+  `failure_message`, and cleanup diagnostics) instead of re-raising. A cleanup
+  failure during an unexpected error is therefore preserved on the result as
+  `cleanup_failed` rather than discarded and rebuilt as a driver-level
+  `runner_exception`. `CancelledError` still propagates.
+- The driver's `except Exception` net now mainly covers direct search (no search
+  state) and any genuine engine bug; per-theorem isolation is unchanged.
+- Tests updated: the two "engine raises on unexpected/limits error" tests now
+  assert ERROR results; the cleanup-failure-during-unexpected-error test asserts
+  the result carries both `failure_message` and `cleanup_failed`.
+
+Still open (TODO point 2): cancellation covers only `search_item_id`, and a
+cancel failure during unwind is swallowed without a runner event.
+
+Validation: `uv run --no-dev --with pytest pytest` -> 66 passed; `flake8` clean;
+`mypy` clean on `leanfoundry/proofsearch/`; `git diff --check` clean.
+
+## 2026-06-23: Refresh lean-client after kimina update
+
+- Inspected kimina commits `7dba5cc1..310e6c13`. The `lean-client`
+  consumer-facing backend signatures and `/exec` Pydantic models used by
+  LeanFoundry did not change.
+- Refreshed `uv.lock` to kimina commit `310e6c13`.
+- Updated the design doc's scheduler/config note for kimina's new
+  resource-sized server launch defaults: worker count is CPU plus
+  memory-bounded, and in-flight/queued caps are derived from worker count. The
+  LeanFoundry runtime contract remains `/exec/limits`.
+- Updated `README.md` to show the downstream Docker server launch path
+  (`docker pull`, `docker run`, `/exec/limits`) before the client usage example.
+
+Validation:
+
+- `uv lock --check` passed.
+- `uv sync --group dev --reinstall-package lean-client` rebuilt `lean-client`
+  from the locked GitHub source.
+- `uv run --isolated --locked --no-dev --with pytest pytest` passed: 66 tests.
+- `uv run --isolated --locked --no-dev --with flake8 flake8 leanfoundry tests`
+  passed.
+- `uv run --locked --no-dev --with mypy mypy leanfoundry/proofsearch` passed.
 - `git diff --check` passed.

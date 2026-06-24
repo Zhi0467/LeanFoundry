@@ -251,7 +251,7 @@ wheels = [
 [[package]]
 name = "lean-client"
 version = "0.1.0"
-source = { git = "https://github.com/Zhi0467/kimina-lean-server.git?subdirectory=packages%2Flean-client&branch=main#7dba5cc11260dcf81b00b36c7a334bd0e34e7cc6" }
+source = { git = "https://github.com/Zhi0467/kimina-lean-server.git?subdirectory=packages%2Flean-client&branch=main#310e6c13d8354ade460a3815a7b2d1c575afc358" }
 dependencies = [
     { name = "colorama" },
     { name = "httpx" },

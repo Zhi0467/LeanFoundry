@@ -19,9 +19,7 @@ from leanfoundry.proofsearch._expansion import (
     BackendProtocolError,
     expand_state,
 )
-from leanfoundry.proofsearch._lifecycle import (
-    cleanup_search_state_best_effort,
-)
+from leanfoundry.proofsearch._lifecycle import cleanup_search_state
 from leanfoundry.proofsearch._extract import (
     UnsupportedProofExtraction,
     extract_proof_tree,
@@ -89,19 +87,16 @@ class AndOrSearchEngine(SearchEngine):
         search_item_id = attempt_context.search_item_id
         tree: SearchTree | None = None
         cleanup_needed = False
-        cleanup_attempted = False
 
         async def finish(result: SearchResult) -> SearchResult:
-            nonlocal cleanup_attempted
-            cleanup_attempted = True
-            cleanup_diagnostics = await cleanup_search_state_best_effort(
+            cleanup_report = await cleanup_search_state(
                 env_backend,
                 attempt_context,
             )
             return result_with_attempt_context(
                 result,
                 attempt_context,
-                diagnostics=cleanup_diagnostics,
+                diagnostics=cleanup_report.diagnostics(),
             )
 
         try:
@@ -222,13 +217,22 @@ class AndOrSearchEngine(SearchEngine):
                     },
                 )
             )
-        except Exception:
-            if cleanup_needed and not cleanup_attempted:
-                await cleanup_search_state_best_effort(
-                    env_backend,
-                    attempt_context,
-                )
-            raise
+        except Exception as error:
+            tactic_calls_made = 0
+            if tree is not None:
+                tactic_calls_made = tree.tactic_calls_made
+            error_result = SearchResult(
+                theorem_id=theorem.id,
+                status=SearchStatus.ERROR,
+                search_budget_used=tactic_calls_made,
+                diagnostics={
+                    "operational_status": "unexpected_error",
+                    "failure_message": str(error),
+                },
+            )
+            if cleanup_needed:
+                return await finish(error_result)
+            return result_with_attempt_context(error_result, attempt_context)
 
 
 __all__ = [

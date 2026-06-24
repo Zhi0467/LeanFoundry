@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 from lean_client.exec_models import ExecCancelResponse
@@ -19,15 +18,19 @@ class CleanupReport:
     attempts: int
     deleted: int
     deferred: int
+    failed: str | None = None
 
-    def diagnostics(self) -> dict[str, int]:
+    def diagnostics(self) -> dict[str, int | str]:
         """Return scalar result diagnostics for cleanup observability."""
 
-        return {
+        report: dict[str, int | str] = {
             "cleanup_attempts": self.attempts,
             "cleanup_deleted": self.deleted,
             "cleanup_deferred": self.deferred,
         }
+        if self.failed is not None:
+            report["cleanup_failed"] = self.failed
+        return report
 
 
 async def cleanup_search_state(
@@ -40,6 +43,11 @@ async def cleanup_search_state(
     states are still in flight comes back with ``status == "deferred"`` instead
     of deleted. Those item ids are resubmitted, with bounded attempts and
     backoff, until the backend drains and deletes them.
+
+    Cleanup is housekeeping and must never mask a primary outcome, so a
+    backend/transport exception is captured into the report as ``failed``
+    together with the actual attempt count, rather than raised.
+    ``CancelledError`` still propagates so cooperative cancellation unwinds.
     """
 
     if context.search_item_id is None:
@@ -48,7 +56,15 @@ async def cleanup_search_state(
     item_ids = [context.search_item_id]
     deleted_total = 0
     for attempt_index in range(context.cleanup_max_attempts):
-        response = await env_backend.cleanup(item_ids)
+        try:
+            response = await env_backend.cleanup(item_ids)
+        except Exception as error:
+            return CleanupReport(
+                attempts=attempt_index + 1,
+                deleted=deleted_total,
+                deferred=len(item_ids),
+                failed=str(error),
+            )
         deleted_total += sum(
             1
             for result in response.deleted_items
@@ -87,29 +103,6 @@ async def cancel_search_state(
     return await env_backend.cancel([context.search_item_id])
 
 
-async def cleanup_search_state_best_effort(
-    env_backend: EnvBackend,
-    context: SearchAttemptContext,
-) -> Mapping[str, int | str]:
-    """Clean owned search state, returning diagnostics and never raising.
-
-    Cleanup is housekeeping. It must never mask an already computed search
-    result or a primary exception, so a failed cleanup is recorded as a
-    ``cleanup_failed`` diagnostic instead of propagating. ``CancelledError``
-    is not swallowed, so cooperative cancellation still unwinds.
-    """
-
-    try:
-        report = await cleanup_search_state(env_backend, context)
-    except Exception as error:
-        return {
-            "cleanup_attempts": context.cleanup_max_attempts,
-            "cleanup_deleted": 0,
-            "cleanup_failed": str(error),
-        }
-    return report.diagnostics()
-
-
 async def cancel_search_state_best_effort(
     env_backend: EnvBackend,
     context: SearchAttemptContext,
@@ -137,5 +130,4 @@ __all__ = [
     "cancel_search_state",
     "cancel_search_state_best_effort",
     "cleanup_search_state",
-    "cleanup_search_state_best_effort",
 ]

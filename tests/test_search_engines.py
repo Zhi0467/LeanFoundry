@@ -1056,22 +1056,23 @@ def test_tree_engine_cleans_search_state_on_unexpected_error() -> None:
     engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
     env = FakeEnvBackend(create_states=[root_state()])
 
-    with pytest.raises(RuntimeError, match="policy unavailable"):
-        asyncio.run(
-            engine.search(
-                theorem(),
-                attempt_context=tree_attempt("unexpected-error-attempt"),
-                policy_client=RaisingPolicyClient(),
-                value_client=None,
-                env_backend=env,
-                config=SearchConfig(
-                    algorithm=SearchAlgorithm.PUCT_TREE,
-                    max_tactic_calls=1,
-                    tactics_per_expansion=1,
-                ),
-            )
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("unexpected-error-attempt"),
+            policy_client=RaisingPolicyClient(),
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+            ),
         )
+    )
 
+    assert result.status is SearchStatus.ERROR
+    assert "policy unavailable" in result.diagnostics["failure_message"]
     assert env.cancel_calls == []
     assert env.cleanup_calls == [["unexpected-error-attempt:search"]]
 
@@ -1084,22 +1085,23 @@ def test_tree_engine_does_not_cleanup_before_search_state_exists() -> None:
     engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
     env = LimitsErrorEnv()
 
-    with pytest.raises(RuntimeError, match="limits unavailable"):
-        asyncio.run(
-            engine.search(
-                theorem(),
-                attempt_context=tree_attempt("limits-error-attempt"),
-                policy_client=FakePolicyClient(tactic_batches=[["trivial"]]),
-                value_client=None,
-                env_backend=env,
-                config=SearchConfig(
-                    algorithm=SearchAlgorithm.PUCT_TREE,
-                    max_tactic_calls=1,
-                    tactics_per_expansion=1,
-                ),
-            )
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("limits-error-attempt"),
+            policy_client=FakePolicyClient(tactic_batches=[["trivial"]]),
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+            ),
         )
+    )
 
+    assert result.status is SearchStatus.ERROR
+    assert "limits unavailable" in result.diagnostics["failure_message"]
     assert env.create_calls == []
     assert env.cleanup_calls == []
 
@@ -1217,22 +1219,24 @@ def test_tree_engine_cleanup_failure_does_not_mask_unexpected_error() -> None:
     engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
     env = CleanupFailingEnv(create_states=[root_state()])
 
-    with pytest.raises(RuntimeError, match="policy unavailable"):
-        asyncio.run(
-            engine.search(
-                theorem(),
-                attempt_context=tree_attempt("mask-error-attempt"),
-                policy_client=RaisingPolicyClient(),
-                value_client=None,
-                env_backend=env,
-                config=SearchConfig(
-                    algorithm=SearchAlgorithm.PUCT_TREE,
-                    max_tactic_calls=1,
-                    tactics_per_expansion=1,
-                ),
-            )
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=tree_attempt("mask-error-attempt"),
+            policy_client=RaisingPolicyClient(),
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+            ),
         )
+    )
 
+    assert result.status is SearchStatus.ERROR
+    assert "policy unavailable" in result.diagnostics["failure_message"]
+    assert result.diagnostics["cleanup_failed"] == "cleanup backend down"
     assert env.cleanup_calls == [["mask-error-attempt:search"]]
 
 

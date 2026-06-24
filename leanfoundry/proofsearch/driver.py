@@ -13,7 +13,7 @@ from leanfoundry.proofsearch._common import (
 )
 from leanfoundry.proofsearch._lifecycle import (
     cancel_search_state_best_effort,
-    cleanup_search_state_best_effort,
+    cleanup_search_state,
 )
 from leanfoundry.proofsearch.base import (
     SearchAlgorithm,
@@ -75,10 +75,7 @@ async def run_search_batch(
                     env_backend,
                     attempt_context,
                 )
-                await cleanup_search_state_best_effort(
-                    env_backend,
-                    attempt_context,
-                )
+                await cleanup_search_state(env_backend, attempt_context)
                 raise
             except Exception as error:
                 return _runner_error_result(
@@ -105,8 +102,9 @@ def _runner_error_result(
 ) -> SearchResult:
     """Isolate one theorem's unexpected failure as its own ERROR result.
 
-    The engine already attempts cleanup for any search state it owned before
-    re-raising, so the runner only records the failure. Returning a result
+    The tree engine is total: it returns an ERROR result (with cleanup
+    diagnostics) rather than raising, so this net mainly covers direct search,
+    which owns no search state, plus any genuine engine bug. Returning a result
     instead of propagating keeps a single bad theorem from failing the batch.
     """
 
