@@ -26,6 +26,14 @@ dependencies = [
     "lean-client",
 ]
 
+[project.optional-dependencies]
+# Training-cluster only (Linux + CUDA). Installed explicitly with
+# `uv sync --extra training`; not part of the default install. See the Slime
+# adapter notes in docs/internal-trackers/todo.md.
+training = [
+    "slime",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
@@ -66,3 +74,4 @@ known_first_party = ["leanfoundry"]
 
 [tool.uv.sources]
 lean-client = { git = "https://github.com/Zhi0467/kimina-lean-server.git", subdirectory = "packages/lean-client", branch = "main" }
+slime = { git = "https://github.com/THUDM/slime.git" }
