@@ -1633,6 +1633,8 @@ CREATE TABLE theorems (
   informal_statement TEXT,
   env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
   header TEXT NOT NULL,
+  theorem_name TEXT,
+  allowed_axioms TEXT,
   initial_lean_block TEXT,
   difficulty_estimate REAL,
   pass_rate_current REAL,

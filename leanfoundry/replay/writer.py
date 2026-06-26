@@ -123,6 +123,8 @@ class _AsyncTransactionContext:
         self.context = context
 
     async def __aenter__(self) -> None:
+        # SQLiteReplayStore transactions are safe under concurrent batch writes
+        # because its async methods perform synchronous DB work without awaits.
         self.context.__enter__()
 
     async def __aexit__(self, exc_type, exc, traceback) -> bool | None:
@@ -143,15 +145,20 @@ def theorem_record_id(theorem: TheoremSpec) -> str:
 
     if theorem.id is not None:
         return theorem.id
+    identity: dict[str, object] = {
+        "lean_statement": theorem.lean_statement,
+        "env_profile": theorem.env_profile,
+        "header": theorem.header,
+        "source": theorem.source,
+        "initial_lean_block": theorem.initial_lean_block,
+    }
+    if theorem.theorem_name is not None:
+        identity["theorem_name"] = theorem.theorem_name
+    if theorem.allowed_axioms is not None:
+        identity["allowed_axioms"] = theorem.allowed_axioms
     return stable_id(
         "theorem",
-        {
-            "lean_statement": theorem.lean_statement,
-            "env_profile": theorem.env_profile,
-            "header": theorem.header,
-            "source": theorem.source,
-            "initial_lean_block": theorem.initial_lean_block,
-        },
+        identity,
     )
 
 

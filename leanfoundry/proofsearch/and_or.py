@@ -36,11 +36,10 @@ from leanfoundry.proofsearch.base import (
 )
 from leanfoundry.proofsearch.extraction import (
     artifacts_with_failure,
-    ExtractionFailure,
     extract_training_artifacts,
     extraction_context_for_theorem,
 )
-from leanfoundry.schemas import TheoremSpec
+from leanfoundry.schemas import ExtractionFailure, TheoremSpec
 
 
 class AndOrSearchEngine(SearchEngine):

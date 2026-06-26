@@ -448,6 +448,20 @@ for this checkpoint.
 
 Validation: included in the next checkpoint verification.
 
+## 2026-06-26: Path-A review follow-ups
+
+- Updated `AGENTS.md` and `CLAUDE.md` to state the landed Path-A contract:
+  whole-proof candidates/A-type rows require final `/exec/verify`, while
+  policy/proved-value artifacts are per-step grounded.
+- Added durable theorem verifier metadata (`theorem_name`, JSON
+  `allowed_axioms`) to the initial schema plus a `0003` migration, and made
+  theorem identity validation include those fields.
+- Documented the synchronous-transaction invariant in the replay writer and the
+  fail-closed interpolated-string behavior in the Lean token scanner.
+- Cleaned an incidental `ExtractionFailure` import path in the tree engine.
+
+Validation: included in the next checkpoint verification.
+
 ## 2026-06-24: Design de-stale completion pass
 
 - Updated the validation harness and training flow to use `/exec/verify` for

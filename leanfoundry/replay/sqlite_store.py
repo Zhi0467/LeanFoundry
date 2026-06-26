@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from contextlib import contextmanager
@@ -29,7 +30,13 @@ POLICY_EXAMPLES_MIGRATION_PATH = (
     / "migrations"
     / "0002_policy_examples.sql"
 )
-SCHEMA_VERSION = 2
+THEOREM_VERIFIER_FIELDS_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "schemas"
+    / "migrations"
+    / "0003_theorem_verifier_fields.sql"
+)
+SCHEMA_VERSION = 3
 
 
 class SQLiteReplayStore:
@@ -94,11 +101,12 @@ class SQLiteReplayStore:
             """
             INSERT INTO theorems (
               id, lean_statement, informal_statement, env_profile, header,
-              initial_lean_block, difficulty_estimate, pass_rate_current,
-              pass_rate_updated_at, source, split, added_at
+              theorem_name, allowed_axioms, initial_lean_block,
+              difficulty_estimate, pass_rate_current, pass_rate_updated_at,
+              source, split, added_at
             )
             VALUES (
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               COALESCE(?, CURRENT_TIMESTAMP)
             )
             """,
@@ -108,6 +116,8 @@ class SQLiteReplayStore:
                 theorem.informal_statement,
                 theorem.env_profile,
                 theorem.header,
+                theorem.theorem_name,
+                _encode_allowed_axioms(theorem.allowed_axioms),
                 theorem.initial_lean_block,
                 theorem.difficulty_estimate,
                 theorem.pass_rate_current,
@@ -126,8 +136,9 @@ class SQLiteReplayStore:
             """
             SELECT
               id, lean_statement, informal_statement, env_profile, header,
-              initial_lean_block, difficulty_estimate, pass_rate_current,
-              pass_rate_updated_at, source, split, added_at
+              theorem_name, allowed_axioms, initial_lean_block,
+              difficulty_estimate, pass_rate_current, pass_rate_updated_at,
+              source, split, added_at
             FROM theorems
             WHERE id = ?
             """,
@@ -135,7 +146,11 @@ class SQLiteReplayStore:
         ).fetchone()
         if row is None:
             return None
-        return TheoremRecord(**dict(row))
+        data = dict(row)
+        data["allowed_axioms"] = _decode_allowed_axioms(
+            data["allowed_axioms"]
+        )
+        return TheoremRecord(**data)
 
     async def put_a_type_data(self, sample: ATypeDataRecord) -> None:
         """Insert one verified theorem/proof training sample."""
@@ -258,6 +273,14 @@ class SQLiteReplayStore:
             self._conn.executescript(migration)
             self._set_schema_version(2)
             self._conn.commit()
+        if self._schema_version() < 3:
+            if not self._has_theorem_verifier_columns():
+                migration = (
+                    THEOREM_VERIFIER_FIELDS_MIGRATION_PATH.read_text()
+                )
+                self._conn.executescript(migration)
+            self._set_schema_version(3)
+            self._conn.commit()
 
     def _schema_version(self) -> int:
         row = self._conn.execute("PRAGMA user_version").fetchone()
@@ -265,6 +288,11 @@ class SQLiteReplayStore:
 
     def _set_schema_version(self, version: int) -> None:
         self._conn.execute(f"PRAGMA user_version = {version}")
+
+    def _has_theorem_verifier_columns(self) -> bool:
+        rows = self._conn.execute("PRAGMA table_info(theorems)").fetchall()
+        columns = {row[1] for row in rows}
+        return {"theorem_name", "allowed_axioms"}.issubset(columns)
 
     def _commit_if_needed(self) -> None:
         if not self._in_transaction:
@@ -279,6 +307,8 @@ def _validate_theorem_identity(
         "lean_statement",
         "env_profile",
         "header",
+        "theorem_name",
+        "allowed_axioms",
         "initial_lean_block",
         "source",
     )
@@ -288,6 +318,25 @@ def _validate_theorem_identity(
                 "theorem id collision with different identity field: "
                 f"{field_name}"
             )
+
+
+def _encode_allowed_axioms(allowed_axioms: list[str] | None) -> str | None:
+    if allowed_axioms is None:
+        return None
+    return json.dumps(allowed_axioms, separators=(",", ":"))
+
+
+def _decode_allowed_axioms(payload: str | None) -> list[str] | None:
+    if payload is None:
+        return None
+    decoded = json.loads(payload)
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) for item in decoded
+    ):
+        raise ValueError(
+            "stored allowed_axioms must be a JSON list of strings"
+        )
+    return decoded
 
 
 def _policy_example_row(example: PolicyExample) -> tuple[object, ...]:

@@ -16,6 +16,10 @@ CREATE TABLE theorems (
   env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
   -- Lean import/options header required to typecheck this theorem.
   header TEXT NOT NULL,
+  -- The theorem declaration name used for final #print axioms checks.
+  theorem_name TEXT,
+  -- JSON-encoded list of allowed axioms; NULL inherits backend defaults.
+  allowed_axioms TEXT,
   -- Optional Lean block with sorry placeholders used as search roots.
   initial_lean_block TEXT,
   -- Optional quick-sampling difficulty estimate for curriculum selection.

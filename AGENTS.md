@@ -48,9 +48,11 @@ consumer that plugs in via stable interfaces.
   `SearchAttemptContext` ids: tree state uses `search_item_id`, final verify
   uses `verify_item_id`, direct verifier attempts use `verify_item_id:k`, and
   checked cleanup/cancel is runner lifecycle work. Training extraction returns a
-  `TrainingArtifacts` envelope; proof/policy/proved-value artifacts require
-  final `/exec/verify` acceptance, while root-runtime-`OPEN` exhaustion emits no
-  policy data and only effort-gated censored value labels in bonded mode.
+  `TrainingArtifacts` envelope; whole-proof candidates/A-type rows require
+  final `/exec/verify` acceptance, while Path-A policy/proved-value artifacts
+  are per-step grounded and can survive Path-B rendering or verification
+  failure. Root-runtime-`OPEN` exhaustion emits no policy data and only
+  effort-gated censored value labels in bonded mode.
 
 ## How to work here (maintainer's standing preferences)
 

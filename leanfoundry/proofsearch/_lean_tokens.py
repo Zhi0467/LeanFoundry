@@ -40,6 +40,8 @@ def find_lean_token(
 
         if in_string:
             if in_interpolated_string:
+                # Fail closed: Lean parses code inside interpolation braces,
+                # but this small scanner does not isolate brace segments.
                 match = _match_token_at(code, index, ordered_tokens)
                 if match is not None:
                     return match

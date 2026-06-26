@@ -27,10 +27,6 @@ MIGRATION_PATH = (
 # They are either search-time-only fields or fields serialized into a
 # different column at storage time.
 _MODEL_FIELDS_NOT_IN_SQL: dict[type[Any], set[str]] = {
-    TheoremRecord: {
-        "theorem_name",  # used at search/verify time, not stored
-        "allowed_axioms",  # used at search/verify time, not stored
-    },
     TrajectoryRecord: {
         "proof_tree",  # serialized as JSON into the tactic_sequence column
     },
@@ -72,6 +68,9 @@ _SQL_DERIVED_NOT_NULL_COLUMNS: dict[str, set[str]] = {
 }
 
 _EXTRA_SQL_COLUMN_AFFINITIES: dict[str, dict[str, str]] = {
+    "theorems": {
+        "allowed_axioms": "TEXT",
+    },
     "trajectories": {
         "tactic_sequence": "TEXT",
     },

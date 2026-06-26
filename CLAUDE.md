@@ -18,11 +18,12 @@ and AND/OR backup, extraction plus final verify, and the concurrent driver.
 tree search state uses `search_item_id`, final verify uses `verify_item_id`,
 direct verifier candidates use `verify_item_id:k`, and checked cleanup/cancel
 belongs to the runner lifecycle. Training extraction emits a `TrainingArtifacts`
-envelope; proof/policy/proved-value artifacts require final `/exec/verify`
-acceptance, and unproved root-open exhaustion emits no policy data. Deferred
-pieces remain graph/MCGS, negation pruning, HER, real policy/value adapters,
-bonded value-label plumbing, and richer proof rendering for split children that
-own multiple focused goals.
+envelope; whole-proof candidates/A-type rows require final `/exec/verify`
+acceptance, while Path-A policy/proved-value artifacts are per-step grounded and
+can survive Path-B rendering or verification failure. Unproved root-open
+exhaustion emits no policy data. Deferred pieces remain graph/MCGS, negation
+pruning, HER, real policy/value adapters, bonded value-label plumbing, and
+richer proof rendering for split children that own multiple focused goals.
 
 **Keep AGENTS.md and this file current as you learn** — prefer updating them over
 re-deriving context. Keep both concise.

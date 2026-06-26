@@ -56,7 +56,7 @@ def test_sqlite_store_applies_policy_examples_migration_to_existing_db(
     store.close()
 
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
     row = conn.execute(
         """
         SELECT name
@@ -65,6 +65,79 @@ def test_sqlite_store_applies_policy_examples_migration_to_existing_db(
         """
     ).fetchone()
     assert row == ("policy_examples",)
+    theorem_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(theorems)")
+    }
+    assert "theorem_name" in theorem_columns
+    assert "allowed_axioms" in theorem_columns
+
+
+def test_sqlite_store_applies_verifier_field_migration_to_v2_db(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "legacy-v2.db"
+    migration = MIGRATION_PATH.read_text()
+    migration = migration.replace("  theorem_name TEXT,\n", "")
+    migration = migration.replace("  allowed_axioms TEXT,\n", "")
+    conn = sqlite3.connect(db_path)
+    conn.executescript(migration)
+    conn.execute("PRAGMA user_version = 2")
+    conn.close()
+
+    store = SQLiteReplayStore(db_path)
+    store.close()
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    theorem_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(theorems)")
+    }
+    assert "theorem_name" in theorem_columns
+    assert "allowed_axioms" in theorem_columns
+
+
+def test_sqlite_store_round_trips_theorem_verifier_metadata(
+    tmp_path,
+) -> None:
+    store = SQLiteReplayStore(tmp_path / "replay.db")
+    record = theorem_record(
+        theorem_name="my_theorem",
+        allowed_axioms=["Classical.choice", "propext"],
+    )
+
+    asyncio.run(store.put_theorem(record))
+    fetched = asyncio.run(store.get_theorem("thm"))
+
+    assert fetched is not None
+    assert fetched.theorem_name == "my_theorem"
+    assert fetched.allowed_axioms == ["Classical.choice", "propext"]
+    store.close()
+
+
+def test_sqlite_store_rejects_verifier_metadata_identity_collision(
+    tmp_path,
+) -> None:
+    store = SQLiteReplayStore(tmp_path / "replay.db")
+    asyncio.run(
+        store.put_theorem(
+            theorem_record(
+                theorem_name="my_theorem",
+                allowed_axioms=["Classical.choice"],
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="allowed_axioms"):
+        asyncio.run(
+            store.put_theorem(
+                theorem_record(
+                    theorem_name="my_theorem",
+                    allowed_axioms=["propext"],
+                )
+            )
+        )
+
+    store.close()
 
 
 def test_sqlite_store_rejects_theorem_id_identity_collision(tmp_path) -> None:
