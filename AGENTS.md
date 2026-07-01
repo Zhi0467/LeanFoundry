@@ -60,8 +60,11 @@ consumer that plugs in via stable interfaces.
 - Training adapter contract (v11.15): tree search training data is lineage-A
   step-level `(proof_state, tactic)` data; direct/self-correct is lineage-B
   whole-proof data. Do NOT render a whole proof from the tree as the data path.
-  The in-repo Slime adapter spec is `docs/design/slime_adapter_spec.md`;
-  LeanFoundry owns Sample token/loss-mask construction, env-profile validation,
+  The in-repo Slime adapter spec is `docs/design/slime_adapter_spec.md` (adapter
+  internals); the operator-facing consumer/handoff guide for a training repo is
+  `docs/train_repo_handoff.md` (wiring, args reference, data-shape, proven-vs-
+  unverified status). LeanFoundry owns Sample token/loss-mask construction,
+  env-profile validation,
   self-correct trace rows, value-client modes (bonded/unbonded and numeric/NL
   scalar), and negation-backed DISPROVED semantics. Slime
   `append_response_tokens(...)` is used when rows carry rollout log-probs;

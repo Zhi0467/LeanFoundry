@@ -1,11 +1,16 @@
 # LeanFoundry
 
 LeanFoundry is a standalone infrastructure project for Lean proof search,
-replay, and evaluation.
+replay, and evaluation. It turns theorem prompts into verifier-grounded training
+data: an AND/OR tree / direct / self-correct search core, Lean verification, and
+a drop-in Slime rollout adapter, all behind LeanFoundry-owned interfaces so
+external datasets and runtimes stay out of core runtime code.
 
-This checkout is currently a scaffold for the v11 architecture. The copied
-LeanDojo-v2 source has been removed; external datasets and runtimes should live
-behind LeanFoundry-owned interfaces rather than in core runtime code.
+**Training-repo engineers start here:**
+[`docs/train_repo_handoff.md`](docs/train_repo_handoff.md) — a read-first
+integration + handoff guide (wiring Slime, the dataset contract, the args
+reference, the training-data shape, and what is proven vs. what you must verify
+on your trainer image) so you can integrate without reading LeanFoundry source.
 
 ## Using LeanFoundry From a Training Repo
 
@@ -116,7 +121,18 @@ only the concrete backend *client* is isolated to the `EnvBackend` adapter
 
 Agent/contributor guidance lives in `AGENTS.md`.
 
+## Slime Training Adapter
+
+For RL / expert-iteration with THUDM Slime, LeanFoundry ships a drop-in rollout
+function under the `training` extra. In short: install `leanfoundry[training]`,
+pass `leanfoundry.slime.add_leanfoundry_arguments` to Slime's parser hook, set
+`--rollout-function-path leanfoundry.slime.generate_rollout`, and feed a theorem
+dataset. The full wiring, argument reference, and data contract live in
+[`docs/train_repo_handoff.md`](docs/train_repo_handoff.md).
+
 ## Design Docs
 
+- `docs/train_repo_handoff.md` — training-repo integration + handoff guide
+- `docs/design/slime_adapter_spec.md` — authoritative Slime adapter contract
 - `docs/design/leanfoundry_system_design_v11.md`
 - `docs/design/canonical_search.md`
