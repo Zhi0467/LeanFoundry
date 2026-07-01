@@ -234,6 +234,32 @@ class Sample:
 > `args.hf_checkpoint`, and train/eval return objects match
 > `RolloutFnTrainOutput` / `RolloutFnEvalOutput`. C2 remains endpoint-live
 > coverage, and C5 remains training-config work.
+>
+> **2026-07-01:** C3/C6 are now sharper: the pinned Slime
+> `Sample.append_response_tokens(...)` requires rollout log-probabilities for
+> trainable tokens. `leanfoundry/slime/samples.py` therefore uses native append
+> only when a row carries `slime_response_log_probs`; verifier-grounded
+> LeanFoundry search rows without SGLang log-probs use an explicit
+> `leanfoundry_verified_without_rollout_logprobs` construction path. The live
+> smoke now covers direct, `puct_tree`, and `self_correct`, and requires at
+> least one emitted row. `LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1` starts a
+> deterministic SGLang-compatible `/generate` endpoint plus temporary HF
+> tokenizer for local adapter e2e when no deployed router exists.
+>
+> **2026-07-01:** `tests/test_slime_tree_ei_live.py` adds a tiny real-SGLang
+> tree EI e2e. It writes a tiny random GPT-2 checkpoint, launches real SGLang,
+> runs `puct_tree` against live Lean, asserts the emitted Slime `Sample` is a
+> tactic row, and performs one local `torch` optimizer step over
+> `tokens`/`response_length`/`loss_mask`. This found and fixed the tree-row
+> contract bug: Slime rollouts now suppress rendered `whole_proof` rows for tree
+> algorithms by default; `lf_include_tree_whole_proof_rows=True` is the explicit
+> opt-in for tree-rendered whole-proof enrichment/audit rows.
+>
+> **2026-07-01:** LeanFoundry now exports
+> `leanfoundry.slime.add_leanfoundry_arguments(parser)` for Slime's
+> `parse_args(add_custom_arguments=...)` hook. It registers LeanFoundry-owned
+> `lean_*` and `lf_*` flags; Slime remains responsible for native training,
+> checkpoint, rollout-batch, and SGLang-router arguments.
 - C6. Tokenizer source and token/loss-mask semantics. The adapter is responsible
   for constructing the exact tokens the trainer consumes. It must use Slime's
   configured tokenizer/checkpoint (or verified SGLang token ids when returned),
@@ -248,7 +274,8 @@ leanfoundry/policy/
 leanfoundry/proofsearch/
   to_rows.py            # Phase 2: to_training_rows() (NO slime import)
 leanfoundry/slime/      # Phase 3: the ONLY place that imports slime/sglang; under [training]
-  __init__.py           #   re-exports generate_rollout
+  __init__.py           #   re-exports generate_rollout + add_leanfoundry_arguments
+  arguments.py          # argparse hook for LeanFoundry-owned lean_* / lf_* flags
   policy.py             # SGLangPolicyClient(HTTPPolicyClient)
   samples.py            # to_samples(): rows -> Slime Sample groups (the 3 branches)
   runner.py             # SlimeRolloutRunner (overridable methods)
@@ -370,9 +397,13 @@ def to_samples(rows: list[TrainingRow], *, rollout_id, tokenizer, args) -> list[
     #      s = Sample(prompt=row.prompt, label=..., rollout_id=rollout_id,
     #                 metadata={**row.meta, "rollout_id": rollout_id})
     #      s.reward = row.reward
-    #      for segment in row.segments or [TrainingSegment(row.response, True)]:
-    #          tok = tokenizer(segment.text)  # see C2/C3 — or reuse SGLang ids
-    #          s.append_response_tokens(args, tokens=tok, trainable=segment.trainable)
+    #      If row.meta carries slime_response_log_probs:
+    #          append segments with Sample.append_response_tokens(...,
+    #          log_probs=<matching trainable slice>, trainable=...)
+    #      Else:
+    #          append verifier-grounded row tokens directly, setting response,
+    #          response_length, and loss_mask without pretending rollout
+    #          log-probs exist.
     #      s.status = Sample.Status.COMPLETED
     # 2. group into list[list[Sample]] honoring §7.
 ```
@@ -381,7 +412,9 @@ Token construction is adapter-owned. For tactic rows, the whole tactic response
 is trainable. For whole-proof rows, the whole verified proof response is
 trainable. For self-correct rows, verifier feedback and any other environment
 observations are appended with `trainable=False`; model proof attempts are
-appended with `trainable=True`. The adapter must assert:
+appended with `trainable=True`. Native Slime append is only valid for trainable
+spans when rollout log-probs exist; otherwise the explicit verified-row fallback
+is the correct path. The adapter must assert:
 `len(sample.loss_mask) == sample.response_length`,
 `sample.response_length == len(response_token_ids)`, and `sample.tokens` matches
 the prompt+response tokenization expected by the Slime trainer.
@@ -436,9 +469,13 @@ a module-level callable Slime imports by path; resources are reused, not rebuilt
 After this lands, the training repo only: (a) launches the Megatron/SGLang
 cluster (weight sync, GPU topology); (b) provides the theorem dataset such that
 each prompt carries statement+env_profile+header+theorem_name (matches C1); (c)
+passes `leanfoundry.slime.add_leanfoundry_arguments` to Slime's parser hook and
 sets `--rollout-function-path leanfoundry.slime.generate_rollout`; (d) optionally
 subclasses `SlimeRolloutRunner` to override model-specific prompt/parse/reward
-hooks; (e) runs eval. No transport, no Sample plumbing, no search code.
+hooks; (e) runs eval. No transport, no Sample plumbing, no search code. Slime
+still supplies native flags such as `--hf-checkpoint`, `--rollout-batch-size`,
+`--over-sampling-batch-size`, `--sglang-router-ip`, and
+`--sglang-router-port`.
 
 ## 6. Reward derivation (explicit; default, overridable via `runner.reward`)
 
@@ -547,6 +584,9 @@ Hermetic (must pass in the default suite, no slime, no GPU):
 - Core-stays-clean import test (§4).
 
 Under `[training]` (marker `slime`, skipped by default):
+- `add_leanfoundry_arguments`: parser tests cover the LeanFoundry-owned
+  namespace fields consumed by `runner.py`, `policy.py`, and `rollout.py`, and
+  verify CLI JSON-like sampling strings reach SGLang as decoded payload fields.
 - Extend `tests/test_slime_compat.py` for any new Slime surface you depend on
   (`generate_rollout` signature, `RolloutFnTrainOutput`, `data_source`, the args
   in §3).
@@ -555,10 +595,18 @@ Under `[training]` (marker `slime`, skipped by default):
   direct groups and tree ragged groups follow §7; all tree sibling samples share
   `Sample.rollout_id`.
 - An opt-in live smoke (`tests/test_slime_live.py`) against a stub
-  `data_source`, a live SGLang router, a live Lean backend, and the configured
-  HF tokenizer checkpoint. It asserts a well-formed `RolloutFnTrainOutput` and
-  allows Lean verifier rejection, because the contract is plumbing rather than
-  model quality.
+  `data_source`, a live SGLang-compatible router, a live Lean backend, and a HF
+  tokenizer checkpoint. It exercises direct, `puct_tree`, and `self_correct`,
+  asserts `RolloutFnTrainOutput`, and requires at least one emitted row so token
+  construction is actually exercised. For local adapter e2e without a deployed
+  router, set `LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1`; the test starts a
+  deterministic `/generate` server and temporary tokenizer while still using
+  real Slime and live Lean.
+- An opt-in tiny EI smoke (`tests/test_slime_tree_ei_live.py`) that launches
+  real SGLang with a tiny generated HF checkpoint, runs live `puct_tree`, checks
+  the tree data is step-level (`lf_kind="tactic"`), and performs one local
+  optimizer step over the emitted Slime sample tensors. This is not a full
+  Megatron/Slime trainer run.
 
 Run: `uv run --no-dev --with pytest pytest` (hermetic),
 `uv run --no-dev --with flake8 flake8 leanfoundry tests`,
@@ -572,6 +620,8 @@ C4 `RolloutFnTrainOutput`/`RolloutFnEvalOutput` fields + eval shape · C5 the
 loss/objective compatibility for direct fixed groups vs tree ragged groups (§7)
 · C6 tokenizer/token/loss-mask construction.
 
-Resolved in the baseline: C1, C3, C4, and C6. C2 now has an opt-in live smoke
-harness. Still live/config gated until that harness is run in deployment: C2
-and C5.
+Resolved in the baseline: C1, C3, C4, and C6. C2 now has opt-in coverage from
+both a deterministic local generator and a tiny real-SGLang tree EI smoke. C5
+has local optimizer-step evidence for one tactic-level tree sample, but remains
+live/config gated for the real Slime/Megatron trainer objective, ragged groups,
+and weight-sync/reload loop.

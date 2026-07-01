@@ -1,6 +1,72 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.83 (2026-07-01):** The Slime handoff now includes an argparse provider:
+> `leanfoundry.slime.add_leanfoundry_arguments(parser)`. The downstream training
+> repo should pass this function to Slime's
+> `parse_args(add_custom_arguments=...)` hook instead of duplicating
+> LeanFoundry's `lean_*` / `lf_*` flag inventory. Slime still owns generic
+> trainer, checkpoint, rollout-batch, and SGLang router flags such as
+> `--hf-checkpoint`, `--rollout-batch-size`, and `--sglang-router-ip`.
+
+> **v11.82 (2026-07-01):** Tree-search Slime rollouts now enforce the
+> lineage-A data contract by default. The live real-SGLang tree EI smoke
+> (`tests/test_slime_tree_ei_live.py`) first exposed that tree search was
+> emitting a verified rendered `whole_proof` row before the intended tactic row.
+> The Slime rollout composition root now suppresses whole-proof rows for tree
+> algorithms unless `lf_include_tree_whole_proof_rows=True` is set. The same
+> e2e writes a tiny random GPT-2 checkpoint, serves it through real SGLang,
+> runs `puct_tree` against live Lean, verifies a tactic-level `Sample`, and
+> performs one local `torch` optimizer step over the emitted
+> `tokens`/`response_length`/`loss_mask`. This proves the local tree EI sample
+> contract, not full Slime/Megatron trainer acceptance or weight sync.
+
+> **v11.81 (2026-07-01):** The local Slime adapter e2e now has a deterministic
+> SGLang-compatible generator. With the Docker Kimina backend on
+> `http://127.0.0.1:8017`, `LEANFOUNDRY_SLIME_E2E=1
+> LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1 ... tests/test_slime_live.py`
+> passed all three modes (`direct`, `puct_tree`, `self_correct`). This uses the
+> real pinned Slime package, real `async_generate_rollout`, real tokenizer
+> loading from a temporary HF checkpoint, and live Lean execution, but the model
+> endpoint is deterministic test infrastructure rather than a deployed SGLang
+> model server. Remaining before trainer-complete claims: run against the real
+> SGLang/Megatron deployment, prove ragged tree groups are accepted by the
+> trainer objective, and run a full Slime/Megatron training run.
+
+> **v11.80 (2026-07-01):** The Slime `Sample` construction boundary is now
+> explicit. `leanfoundry/slime/samples.py` uses Slime's native
+> `Sample.append_response_tokens(...)` only when a row carries
+> `slime_response_log_probs`; the pinned Slime API rejects trainable appended
+> tokens without rollout log-probabilities. LeanFoundry's default search rows
+> are already verifier-grounded and do not carry those SGLang rollout
+> log-probs, so they use an explicit `leanfoundry_verified_without_rollout_logprobs`
+> fallback while still setting prompt/response tokens, `response_length`, and
+> `loss_mask`. The opt-in live Slime smoke now covers `direct`, `puct_tree`,
+> and `self_correct` modes and requires at least one emitted row. This is
+> adapter/API evidence, not a trainer-complete claim: real Slime/SGLang trainer
+> acceptance, ragged tree groups, and a full training run remain unproven until
+> the live stack exists and passes.
+
+> **v11.79 (2026-07-01):** Local `/exec` e2e was recovered after starting the
+> Docker Kimina backend. The server image `zzzzhi/kimina-lean-server:9820b9a`
+> ran on `http://127.0.0.1:8017` with one Pantograph worker, bounded
+> `/exec/limits`, and `LEANFOUNDRY_E2E=1 ... tests/test_e2e_search.py` passed
+> all seven live tests. Superseded by v11.81 for local Slime adapter e2e
+> evidence.
+
+> **v11.78 (2026-07-01):** Completion evidence is now live-e2e gated. A
+> runtime path is not considered done until its relevant live e2e has actually
+> run and passed in the target environment; hermetic tests, fake transports,
+> skipped e2e tests, import-only compatibility checks, and checklists do not
+> prove completion. The `main` branch is currently core-only after the
+> extension split: Extension A-D implementation snapshots are preserved on
+> `extensions/codex-full`, but are not trusted current `main` implementation.
+> Do not merge that branch wholesale into `main`; future extension work must
+> cherry-pick or re-implement reviewed pieces onto current `main`. Any lower
+> historical note saying an extension component "landed" should be read as
+> history from the pre-split snapshot unless the corresponding package exists
+> on `main` and has live-e2e evidence.
+
 > **v11.77 (2026-06-30):** Backend validation reports now carry live-run
 > latency diagnostics. `BackendValidationReport` records create, replay-step
 > aggregate, verify, and total elapsed seconds, and
@@ -414,9 +480,8 @@
 > `LEANFOUNDRY_SLIME_E2E=1`, it drives the real
 > `leanfoundry.slime.async_generate_rollout` path through the pinned Slime
 > package, a live SGLang router, a live Kimina Lean backend, and the configured
-> tokenizer checkpoint for one direct whole-proof theorem. The generated proof
-> may be rejected by Lean; the smoke is a plumbing check, not a model-quality
-> check. Default test runs skip it, and actually executing it remains
+> tokenizer checkpoint. Superseded by v11.80 for mode coverage and row-emission
+> strength. Default test runs skip it, and actually executing it remains
 > deployment-environment work.
 
 > **v11.33 (2026-06-30):** Direct whole-proof search now treats
@@ -1140,8 +1205,9 @@ Trigger: model has plateaued on LeanDojo novel_premises split, and data
 diversity (not compute) is the limiting factor.
 
 ### Extension C: Test-Time Training Module (Part V, §21-24)
-> **Status: Generic local loop and trace-replay contract. Concrete trainer and
-> selected per-problem search source remain downstream/future work.**
+> **Status: Off-main snapshot / future work after the 2026-07-01 split.
+> Concrete trainer, selected per-problem search source, and any mainline TTT
+> contract remain future work.**
 
 Per-problem LoRA fine-tuning on search traces found during inference,
 for olympiad-level targets with no other training signal. Evaluation-time
@@ -1325,7 +1391,7 @@ round trains at the capability frontier. Autoformalization prevents the
 flywheel from stalling when LeanDojo signal is exhausted.
 
 **P9 — Explicit complexity escalation.**
-Extensions A, B, C are not "future work" — they are upgrades with
+Extensions A, B, C are future/off-main work with
 explicit trigger conditions:
 - Extension A (cluster scale-out): single-machine search throughput is
   the measured bottleneck
@@ -2870,15 +2936,20 @@ async def async_generate_rollout(args, rollout_id, data_source, evaluation=False
     source_samples = runner.source_samples(data_source, args)
     theorems = runner.theorems_from_source(source_samples, args)
     runner.validate_env_profiles(theorems, args)
+    config = runner.search_config(args)
 
     search_results = await run_search_batch(
         theorems,
         policy_client=policy,
         value_client=value,
         env_backend=env,
-        config=runner.search_config(args),
+        config=config,
         model_version=rollout_id,
     )
+
+    include_whole_proofs = config.algorithm in {"direct", "self_correct"}
+    if getattr(args, "lf_include_tree_whole_proof_rows", False):
+        include_whole_proofs = True
 
     rows = [
         row
@@ -2886,6 +2957,7 @@ async def async_generate_rollout(args, rollout_id, data_source, evaluation=False
         for row in to_training_rows(
             result,
             theorem,
+            include_whole_proofs=include_whole_proofs,
             include_failed_self_correct_negatives=getattr(
                 args,
                 "lf_include_failed_self_correct_negatives",
@@ -3888,14 +3960,13 @@ also the connectivity check before any real work.
 ---
 
 # Part III: [EXTENSION A] Multi-Machine Scale-Out
-> **Status: Local reference baseline, deployment implementation deferred.
+> **Status: Off-main snapshot / future work after the 2026-07-01 split.
 > Trigger: single-machine throughput is the bottleneck, not model capability.
-> LeanFoundry now owns typed router metrics/autoscale decisions and portable
-> state references, a binary frame codec, pure router scheduler semantics, and
-> a reference asyncio TCP router service with optional HTTP health/metrics. It
-> does not implement the production router deployment, backend state
-> export/import, distributed replay stores, or site-specific supervisor and
-> autoscaler integration.**
+> Current `main` has no `leanfoundry.scaleout` package, router CLIs, or
+> `[scaleout]` extra. The pre-split implementation snapshot is preserved on
+> `extensions/codex-full`; any future re-import needs fresh review and live
+> e2e evidence. Function/package references below describe preserved
+> snapshot/design material, not current `main`.**
 
 ## 11. What Changes at Multi-Machine Scale
 
@@ -4246,12 +4317,15 @@ Suggested migration order:
 ---
 
 # Part IV: [EXTENSION B] Autoformalization Data Pipeline
-> **Status: Promotion contract baseline, generation pipeline pending research.
+> **Status: Core staging schema plus off-main snapshot / future work after the
+> 2026-07-01 split.
 > Do not build LLM drafting/retry/judge/dedup services until the core system
-> produces satisfactory results on LeanDojo novel_premises split. LeanFoundry
-> now preserves staging headers and owns a deterministic promotion gate; the
-> upstream formalizer/judge/dedup implementations still require empirical data
-> from training runs.**
+> produces satisfactory results on LeanDojo novel_premises split. Current
+> `main` preserves staging headers; promotion gates, statement checking,
+> formalizer/judge/dedup services, and draft/retry orchestration are
+> off-main/future and need live staged-corpus/backend evidence. References
+> below to those services describe preserved snapshot/design material, not
+> current `main`.**
 
 ## 17. Why LeanDojo Alone Is Not Enough
 
@@ -4392,12 +4466,13 @@ is high enough to yield meaningful throughput.
 ---
 
 # Extension C: Test-Time Training Module
-> **Status: Generic local loop and trace-replay contract. LeanFoundry owns
-> framework-neutral TTT protocols, trace schemas, the callback-driven
-> orchestration loop, the local trace-promotion decision gate, and the explicit
-> promoted-trace replay write. The downstream training repo still owns LoRA
-> optimizer execution and concrete SGLang reload; MCGS or another selected
-> per-problem search source remains future work.**
+> **Status: Off-main snapshot / future work after the 2026-07-01 split.
+> Current `main` has no `leanfoundry.ttt` package, TTT schemas, TTT replay
+> table, TTT adapter, or TTT orchestration loop. The downstream training repo
+> still owns LoRA optimizer execution and concrete SGLang reload; MCGS or
+> another selected per-problem search source remains future work. References
+> below to TTT APIs describe preserved snapshot/design material, not current
+> `main`.**
 
 ## 21. Motivation
 
@@ -4537,15 +4612,16 @@ external data.
 ---
 
 # Part V: [EXTENSION D] Controlled Algorithm Ablation Study
-> **Status: Contract baseline. Run after Stage 1 checkpoint and a hygiene-
-> passed curated pool exist. LeanFoundry now owns the ablation plan schema
-> (`AblationExperimentPlan`) and default arm/ledger/eval-matrix helpers; the
-> training repo still owns optimizer execution and checkpoint production. This
-> Part is additive — it does not change Stages 2-4, their dynamic frontier
+> **Status: Training-repo / future work after the 2026-07-01 split. Current
+> `main` has no ablation-plan schemas, budget guard, SQLite budget meter, or
+> budget CLI. Run after Stage 1 checkpoint and a hygiene-passed curated pool
+> exist. The training repo owns optimizer execution and checkpoint production.
+> This Part is additive — it does not change Stages 2-4, their dynamic frontier
 > filtering, or their adaptive exit criteria. Those remain the production "how
 > far can we go" recipe. Extension D answers a different, narrower question
 > under its own frozen conditions, run alongside the core pipeline rather than
-> replacing any part of it.**
+> replacing any part of it. References below to ablation/budget APIs describe
+> preserved snapshot/design material, not current `main`.**
 
 ## 25. Motivation and Relationship to the Core Pipeline
 

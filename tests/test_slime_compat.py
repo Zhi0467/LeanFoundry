@@ -77,3 +77,38 @@ def test_append_response_tokens_supports_trainable_spans():
     parameter = inspect.signature(append).parameters.get("trainable")
     assert parameter is not None, "append_response_tokens lost `trainable`"
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_append_response_tokens_requires_trainable_log_probs():
+    """LeanFoundry's verified-row fallback exists for this Slime contract."""
+
+    sample_type = _sample_type()
+    sample = sample_type(prompt="P:", tokens=[1, 2])
+
+    sample.append_response_tokens(
+        tokens=[3, 4],
+        log_probs=[-0.1, -0.2],
+        trainable=True,
+        text="ok",
+        update_terminal_info=False,
+    )
+    sample.append_response_tokens(
+        tokens=[5],
+        trainable=False,
+        text="!",
+        update_terminal_info=False,
+    )
+
+    assert sample.tokens == [1, 2, 3, 4, 5]
+    assert sample.response == "ok!"
+    assert sample.response_length == 3
+    assert sample.loss_mask == [1, 1, 0]
+    assert sample.rollout_log_probs == [-0.1, -0.2, 0.0]
+
+    with pytest.raises(ValueError, match="rollout log probabilities"):
+        sample_type(prompt="P:", tokens=[1, 2]).append_response_tokens(
+            tokens=[3],
+            trainable=True,
+            text="x",
+            update_terminal_info=False,
+        )

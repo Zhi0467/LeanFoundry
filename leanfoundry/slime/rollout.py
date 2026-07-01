@@ -10,6 +10,7 @@ from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 
 from leanfoundry.env_backend import EnvBackend
 from leanfoundry.policy import PolicyClient, ValueClient
+from leanfoundry.proofsearch import SearchAlgorithm, SearchConfig
 from leanfoundry.proofsearch import run_search_batch
 from leanfoundry.proofsearch.to_rows import TrainingRow, to_training_rows
 from leanfoundry.schemas import TheoremSpec
@@ -67,6 +68,7 @@ async def async_generate_rollout(
     rows = _rows_from_results(
         results,
         theorems,
+        include_whole_proofs=_include_whole_proof_rows(args, config),
         include_failed_self_correct_negatives=getattr(
             args,
             "lf_include_failed_self_correct_negatives",
@@ -126,6 +128,7 @@ def _rows_from_results(
     results: list[Any],
     theorems: list[TheoremSpec],
     *,
+    include_whole_proofs: bool = True,
     include_failed_self_correct_negatives: bool = False,
 ) -> list[TrainingRow]:
     rows: list[TrainingRow] = []
@@ -134,12 +137,22 @@ def _rows_from_results(
             to_training_rows(
                 result,
                 theorem,
+                include_whole_proofs=include_whole_proofs,
                 include_failed_self_correct_negatives=(
                     include_failed_self_correct_negatives
                 ),
             )
         )
     return rows
+
+
+def _include_whole_proof_rows(args: Any, config: SearchConfig) -> bool:
+    if getattr(args, "lf_include_tree_whole_proof_rows", False):
+        return True
+    return config.algorithm in {
+        SearchAlgorithm.DIRECT,
+        SearchAlgorithm.SELF_CORRECT,
+    }
 
 
 def _metrics(results: list[Any], rows: list[TrainingRow]) -> dict[str, Any]:

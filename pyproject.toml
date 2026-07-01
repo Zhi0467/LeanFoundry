@@ -29,15 +29,8 @@ dependencies = [
 [project.scripts]
 leanfoundry-reconcile-lifecycle = "leanfoundry.replay.lifecycle_cli:main"
 leanfoundry-validate-backend = "leanfoundry.env_backend.validation_cli:main"
-leanfoundry-router = "leanfoundry.scaleout.router_cli:main"
-leanfoundry-router-worker = "leanfoundry.scaleout.worker_cli:main"
-leanfoundry-budget-meter = "leanfoundry.evals.budget_cli:main"
 
 [project.optional-dependencies]
-scaleout = [
-    "zstandard>=0.23.0",
-]
-
 # Training-cluster only (Linux + CUDA). Installed explicitly with
 # `uv sync --extra training`; not part of the default install. Slime is pinned
 # to an explicit commit in [tool.uv.sources]; bump it deliberately and re-run

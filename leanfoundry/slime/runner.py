@@ -230,8 +230,11 @@ class SlimeRolloutRunner:
     ) -> list[list[Any]]:
         """Convert rows into Slime Sample groups."""
 
+        row_list = list(rows)
+        if not row_list:
+            return []
         return rows_to_samples(
-            rows,
+            row_list,
             rollout_id=rollout_id,
             tokenizer=self.build_tokenizer(args),
             args=args,

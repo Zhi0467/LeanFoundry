@@ -44,6 +44,7 @@ def to_training_rows(
     result: SearchResult,
     theorem: TheoremSpec,
     *,
+    include_whole_proofs: bool = True,
     include_failed_self_correct_negatives: bool = False,
     tactic_prompt: Callable[
         [FactorizedProofState],
@@ -60,23 +61,24 @@ def to_training_rows(
     group_key = _group_key(result, theorem)
     rows: list[TrainingRow] = []
 
-    for proof_candidate in artifacts.proof_candidates:
-        if not proof_candidate.verified:
-            continue
-        response = proof_candidate.rendered_lean.strip()
-        if not response:
-            continue
-        rows.append(
-            TrainingRow(
-                kind="whole_proof",
-                prompt=proof_prompt(theorem),
-                response=response,
-                reward=1.0,
-                group_key=group_key,
-                meta=_base_meta(result, theorem, lf_kind="whole_proof"),
-                segments=(TrainingSegment(response, True),),
+    if include_whole_proofs:
+        for proof_candidate in artifacts.proof_candidates:
+            if not proof_candidate.verified:
+                continue
+            response = proof_candidate.rendered_lean.strip()
+            if not response:
+                continue
+            rows.append(
+                TrainingRow(
+                    kind="whole_proof",
+                    prompt=proof_prompt(theorem),
+                    response=response,
+                    reward=1.0,
+                    group_key=group_key,
+                    meta=_base_meta(result, theorem, lf_kind="whole_proof"),
+                    segments=(TrainingSegment(response, True),),
+                )
             )
-        )
 
     for example in artifacts.policy_examples:
         response = example.tactic.strip()

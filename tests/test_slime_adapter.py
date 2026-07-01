@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import importlib
 import sys
@@ -10,12 +11,14 @@ from enum import Enum
 
 import pytest
 
+from leanfoundry.policy import PolicySamplingParams
 from leanfoundry.proofsearch import SearchResult, SearchStatus
 from leanfoundry.proofsearch.to_rows import TrainingRow, TrainingSegment
 from leanfoundry.schemas import (
     FactorizedProofState,
     GoalComponent,
     PolicyExample,
+    ProofTree,
     SelfCorrectTrace,
     SelfCorrectTurn,
     TrainingArtifacts,
@@ -29,6 +32,16 @@ class FakeTokenizer:
         add_special_tokens: bool = False,
     ) -> list[int]:
         return [ord(char) for char in text]
+
+
+class FakeJsonTransport:
+    def __init__(self, responses: list[object]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def post_json(self, url: str, payload: dict[str, object]) -> object:
+        self.calls.append((url, payload))
+        return self.responses.pop(0)
 
 
 @dataclass
@@ -50,9 +63,50 @@ class FakeSample:
     label: str | None = None
     reward: float | None = None
     loss_mask: list[int] | None = None
+    rollout_log_probs: list[float] | None = None
     status: Status = Status.PENDING
     metadata: dict = field(default_factory=dict)
     train_metadata: dict | None = None
+
+    def append_response_tokens(
+        self,
+        args=None,
+        *,
+        tokens=None,
+        log_probs=None,
+        trainable: bool = True,
+        meta_info: dict | None = None,
+        text: str | None = None,
+        update_terminal_info: bool = True,
+    ) -> None:
+        del args, meta_info, update_terminal_info
+        token_list = [int(token) for token in (tokens or [])]
+        if log_probs is not None:
+            log_prob_list = [float(log_prob) for log_prob in log_probs]
+            if len(log_prob_list) != len(token_list):
+                raise ValueError("log_probs length mismatch")
+        else:
+            log_prob_list = None
+        if token_list and trainable and log_prob_list is None:
+            raise ValueError("trainable response tokens require log probs")
+        if token_list and not trainable:
+            if log_prob_list is not None:
+                raise ValueError("non-trainable tokens cannot pass log probs")
+            log_prob_list = [0.0] * len(token_list)
+
+        if text is not None:
+            self.response += text
+        previous_response_length = self.response_length
+        if token_list:
+            self.tokens += token_list
+            self.response_length += len(token_list)
+            if self.loss_mask is None:
+                self.loss_mask = [1] * previous_response_length
+            self.loss_mask += [1 if trainable else 0] * len(token_list)
+        if log_prob_list is not None:
+            if self.rollout_log_probs is None:
+                self.rollout_log_probs = [0.0] * previous_response_length
+            self.rollout_log_probs += log_prob_list
 
 
 @dataclass
@@ -151,6 +205,203 @@ def test_to_samples_sets_tokens_loss_mask_and_groups(
     assert first.loss_mask == [1, 1, 1] + [0] * 10 + [1, 1, 1, 1]
     assert first.metadata["lf_kind"] == "self_correct"
     assert first.metadata["rollout_id"] == 9
+    assert (
+        first.metadata["lf_trainable_token_source"]
+        == "leanfoundry_verified_without_rollout_logprobs"
+    )
+    assert first.rollout_log_probs is None
+
+
+def test_to_samples_uses_slime_append_when_log_probs_exist(
+    fake_slime_modules,
+) -> None:
+    samples_module = importlib.import_module("leanfoundry.slime.samples")
+    rows = [
+        TrainingRow(
+            kind="whole_proof",
+            prompt="P:",
+            response="done",
+            reward=1.0,
+            group_key="theorem-1",
+            meta={
+                "env_profile": "mathlib",
+                "slime_response_log_probs": [-0.1, -0.2, -0.3, -0.4],
+            },
+            segments=(TrainingSegment("done", True),),
+        )
+    ]
+
+    groups = samples_module.to_samples(
+        rows,
+        rollout_id=10,
+        tokenizer=FakeTokenizer(),
+    )
+
+    sample = groups[0][0]
+    assert sample.tokens == [ord(char) for char in "P:done"]
+    assert sample.response == "done"
+    assert sample.response_length == 4
+    assert sample.loss_mask == [1, 1, 1, 1]
+    assert sample.rollout_log_probs == [-0.1, -0.2, -0.3, -0.4]
+    assert sample.metadata["lf_trainable_token_source"] == (
+        "slime_append_response_tokens"
+    )
+    assert "slime_response_log_probs" not in sample.metadata
+
+
+def test_add_leanfoundry_arguments_registers_adapter_flags() -> None:
+    from leanfoundry.slime import add_leanfoundry_arguments
+
+    parser = argparse.ArgumentParser()
+    parser = add_leanfoundry_arguments(parser)
+    args = parser.parse_args(
+        [
+            "--lean-api-url",
+            "http://lean",
+            "--lean-env-profile",
+            "mathlib",
+            "--lf-search-algorithm",
+            "direct",
+            "--lf-use-value-client",
+            "--lf-value-mode",
+            "bonded",
+            "--lf-tactic-max-new-tokens",
+            "7",
+            "--lf-tactic-logit-bias",
+            '{"0": 100.0}',
+            "--lf-include-tree-whole-proof-rows",
+        ]
+    )
+
+    assert args.lean_api_url == "http://lean"
+    assert args.lean_env_profile == "mathlib"
+    assert args.lean_timeout_ms == 5000
+    assert args.lf_search_algorithm == "direct"
+    assert args.lf_use_value_client is True
+    assert args.lf_value_mode == "bonded"
+    assert args.lf_value_output_mode == "natural_language"
+    assert args.lf_tactic_max_new_tokens == 7
+    assert args.lf_tactic_logit_bias == '{"0": 100.0}'
+    assert args.lf_include_tree_whole_proof_rows is True
+    assert args.lf_include_failed_self_correct_negatives is False
+    assert args.lf_proof_max_new_tokens is None
+
+
+def test_add_leanfoundry_arguments_rejects_unknown_modes() -> None:
+    from leanfoundry.slime import add_leanfoundry_arguments
+
+    parser = add_leanfoundry_arguments(argparse.ArgumentParser())
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--lf-search-algorithm", "graph"])
+
+
+def test_sglang_policy_client_uses_sglang_sampling_param_names() -> None:
+    from leanfoundry.slime.policy import SGLangPolicyClient
+
+    transport = FakeJsonTransport([{"text": "trivial"}])
+    client = SGLangPolicyClient(
+        Namespace(
+            sglang_router_ip="127.0.0.1",
+            sglang_router_port=30000,
+            lf_tactic_temperature=0.0,
+            lf_tactic_top_p=1.0,
+            lf_tactic_max_new_tokens=1,
+            lf_tactic_logit_bias={"0": 100.0},
+        ),
+        http=transport,
+    )
+    state = FactorizedProofState(
+        env_profile="mathlib",
+        goal_components=[
+            GoalComponent(target="True", pretty="⊢ True", hypotheses=[])
+        ],
+        pretty_state="⊢ True",
+    )
+
+    result = asyncio.run(client.sample_tactics([state], n=1))
+
+    assert result == [["trivial"]]
+    _, payload = transport.calls[0]
+    assert payload["sampling_params"] == {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "max_new_tokens": 1,
+        "logit_bias": {"0": 100.0},
+        "n": 1,
+    }
+
+
+def test_sglang_policy_client_maps_generic_max_tokens_override() -> None:
+    from leanfoundry.slime.policy import SGLangPolicyClient
+
+    transport = FakeJsonTransport([{"text": "trivial"}])
+    client = SGLangPolicyClient(
+        Namespace(
+            sglang_router_ip="127.0.0.1",
+            sglang_router_port=30000,
+            lf_tactic_max_new_tokens=8,
+        ),
+        http=transport,
+    )
+    state = FactorizedProofState(
+        env_profile="mathlib",
+        goal_components=[
+            GoalComponent(target="True", pretty="⊢ True", hypotheses=[])
+        ],
+        pretty_state="⊢ True",
+    )
+
+    asyncio.run(
+        client.sample_tactics(
+            [state],
+            n=1,
+            params=PolicySamplingParams(max_tokens=3),
+        )
+    )
+
+    _, payload = transport.calls[0]
+    assert payload["sampling_params"]["max_new_tokens"] == 3
+    assert "max_tokens" not in payload["sampling_params"]
+
+
+def test_sglang_policy_client_decodes_cli_sampling_json() -> None:
+    from leanfoundry.slime import add_leanfoundry_arguments
+    from leanfoundry.slime.policy import SGLangPolicyClient
+
+    parser = add_leanfoundry_arguments(argparse.ArgumentParser())
+    parser.add_argument("--sglang-router-ip", default="127.0.0.1")
+    parser.add_argument("--sglang-router-port", type=int, default=30000)
+    args = parser.parse_args(
+        [
+            "--lf-tactic-max-tokens",
+            "2",
+            "--lf-tactic-logit-bias",
+            '{"0": 100.0}',
+            "--lf-tactic-stop-token-ids",
+            "[1, 2]",
+        ]
+    )
+    transport = FakeJsonTransport([{"text": "trivial"}])
+    client = SGLangPolicyClient(args, http=transport)
+    state = FactorizedProofState(
+        env_profile="mathlib",
+        goal_components=[
+            GoalComponent(target="True", pretty="⊢ True", hypotheses=[])
+        ],
+        pretty_state="⊢ True",
+    )
+
+    result = asyncio.run(client.sample_tactics([state], n=1))
+
+    assert result == [["trivial"]]
+    _, payload = transport.calls[0]
+    assert payload["sampling_params"] == {
+        "max_new_tokens": 2,
+        "logit_bias": {"0": 100.0},
+        "stop_token_ids": [1, 2],
+        "n": 1,
+    }
 
 
 def test_runner_builds_theorems_and_rejects_mixed_profiles(
@@ -244,6 +495,22 @@ def test_runner_build_tokenizer_uses_hf_checkpoint(
     assert fake_slime_modules.loaded_checkpoints == [
         ("model/path", {"trust_remote_code": True})
     ]
+
+
+def test_runner_to_samples_skips_tokenizer_for_empty_rows(
+    fake_slime_modules,
+) -> None:
+    runner_module = importlib.import_module("leanfoundry.slime.runner")
+    runner = runner_module.SlimeRolloutRunner()
+
+    groups = runner.to_samples(
+        [],
+        rollout_id=1,
+        args=Namespace(hf_checkpoint="missing"),
+    )
+
+    assert groups == []
+    assert fake_slime_modules.loaded_checkpoints == []
 
 
 def test_runner_builds_bonded_and_unbonded_value_clients(
@@ -341,6 +608,12 @@ def test_async_generate_rollout_runs_search_and_returns_samples(
                 theorem_id="t-1",
                 status=SearchStatus.PROVED,
                 training_artifacts=TrainingArtifacts(
+                    proof_candidates=[
+                        ProofTree(
+                            rendered_lean="theorem t : True := by\n  trivial",
+                            verified=True,
+                        )
+                    ],
                     policy_examples=[
                         PolicyExample(
                             state=state,

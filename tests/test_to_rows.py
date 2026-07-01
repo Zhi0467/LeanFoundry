@@ -112,6 +112,41 @@ def test_to_training_rows_emits_tactic_rows() -> None:
     assert row.segments[0].trainable
 
 
+def test_to_training_rows_can_suppress_whole_proof_rows() -> None:
+    theorem = _theorem()
+    result = SearchResult(
+        attempt_id="attempt-1",
+        theorem_id=theorem.id,
+        status=SearchStatus.PROVED,
+        training_artifacts=TrainingArtifacts(
+            proof_candidates=[
+                ProofTree(
+                    rendered_lean="by\n  trivial",
+                    verified=True,
+                )
+            ],
+            policy_examples=[
+                PolicyExample(
+                    state=_state(),
+                    tactic="trivial",
+                    theorem_id=theorem.id,
+                    env_profile=theorem.env_profile,
+                    depth=0,
+                )
+            ],
+        ),
+        search_budget_used=1,
+    )
+
+    rows = to_training_rows(
+        result,
+        theorem,
+        include_whole_proofs=False,
+    )
+
+    assert [row.kind for row in rows] == ["tactic"]
+
+
 def test_to_training_rows_emits_self_correct_rows() -> None:
     theorem = _theorem()
     result = SearchResult(

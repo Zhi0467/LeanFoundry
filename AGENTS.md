@@ -63,11 +63,21 @@ consumer that plugs in via stable interfaces.
   The in-repo Slime adapter spec is `docs/design/slime_adapter_spec.md`;
   LeanFoundry owns Sample token/loss-mask construction, env-profile validation,
   self-correct trace rows, value-client modes (bonded/unbonded and numeric/NL
-  scalar), and negation-backed DISPROVED semantics.
-- Extension C / TTT has framework-neutral contracts, a callback-driven
-  orchestration loop, an opt-in promotion gate, and durable promoted-trace
-  replay rows. Concrete trainer-side fine-tuning/reload and MCGS/per-problem
-  search sources remain downstream/future work.
+  scalar), and negation-backed DISPROVED semantics. Slime
+  `append_response_tokens(...)` is used when rows carry rollout log-probs;
+  verifier-grounded LeanFoundry rows without SGLang log-probs use the explicit
+  `leanfoundry_verified_without_rollout_logprobs` construction path. The tiny
+  real-SGLang tree EI smoke proves this local sample contract plus one local
+  optimizer step, not full Slime/Megatron trainer acceptance or weight sync.
+  Downstream Slime launches should use
+  `leanfoundry.slime.add_leanfoundry_arguments` for LeanFoundry-owned args
+  instead of duplicating the adapter flag list.
+- Extensions A-D are not current `main` implementation. A full pre-split
+  snapshot is preserved on `extensions/codex-full`, but those components need
+  fresh design review and live e2e before any future mainline claim. Keep the
+  two-branch separation: do not merge `extensions/codex-full` wholesale into
+  `main`; future extension work must cherry-pick or re-implement reviewed
+  pieces onto current `main`.
 
 ## How to work here (maintainer's standing preferences)
 
@@ -96,6 +106,11 @@ consumer that plugs in via stable interfaces.
   implementation notes in `implementation-log.md`; run targeted tests, full
   tests, lint, and `git diff --check`; leave `todo.md` focused on unresolved or
   future work.
+- Do not claim a runtime path is done unless its live e2e has actually run and
+  passed in the relevant environment. Hermetic tests, fake transports, skipped
+  e2e tests, import-only compat checks, and docs/checklists are not completion
+  evidence. If the live Lean/SGLang/Slime services are absent, say the path is
+  not e2e-proven and do not mark it complete.
 - Git: **commit directly to `main`** — do not create a feature branch unless
   asked. Still **ask before any `git push`**.
 

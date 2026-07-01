@@ -34,12 +34,21 @@ Do not render a whole proof from the tree as the training-data path. The
 authoritative adapter handoff is `docs/design/slime_adapter_spec.md`: LeanFoundry
 owns Slime Sample token/loss-mask construction, env-profile validation,
 self-correct trace rows, value-client modes, and negation-backed DISPROVED
-semantics.
+semantics. Use Slime `append_response_tokens(...)` when rows carry rollout
+log-probs; verifier-grounded LeanFoundry rows without SGLang log-probs use the
+explicit `leanfoundry_verified_without_rollout_logprobs` construction path. The
+tiny real-SGLang tree EI smoke proves this local sample contract plus one local
+optimizer step, not full Slime/Megatron trainer acceptance or weight sync.
+Downstream Slime launches should pass
+`leanfoundry.slime.add_leanfoundry_arguments` to Slime's parser hook instead of
+duplicating LeanFoundry-owned args.
 
-Extension C / TTT has framework-neutral contracts, a callback-driven
-orchestration loop, an opt-in promotion gate, and durable promoted-trace replay
-rows. Concrete trainer-side fine-tuning/reload and MCGS/per-problem search
-sources remain downstream/future work.
+Extensions A-D are not current `main` implementation. A full pre-split snapshot
+is preserved on `extensions/codex-full`, but those components need fresh design
+review and live e2e before any future mainline claim. Keep the two-branch
+separation: do not merge `extensions/codex-full` wholesale into `main`; future
+extension work must cherry-pick or re-implement reviewed pieces onto current
+`main`.
 
 **Keep AGENTS.md and this file current as you learn** — prefer updating them over
 re-deriving context. Keep both concise.
@@ -56,3 +65,7 @@ changes how agents should work in this repo, update these files. Keep `todo.md`
 future-facing; put completed slice notes in
 `docs/internal-trackers/implementation-log.md`; validate changes with targeted
 tests, full tests, lint, and `git diff --check`.
+
+Do not claim a runtime path is done unless its live e2e has actually run and
+passed in the relevant environment. Hermetic/fake tests, skipped e2e tests,
+compat imports, and docs checklists are not completion evidence.

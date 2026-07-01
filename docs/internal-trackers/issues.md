@@ -26,6 +26,8 @@ Status values:
   selected datasets outside this checkout.
 - `external-stale-risk`: external facts may have changed and need fresh source
   verification before publication claims.
+- `off-main-snapshot`: implementation exists only on a preserved non-main
+  branch and is not trusted current `main` implementation.
 
 | Design section | Status | Evidence checked | Issue refs | Missing coverage / action |
 |---|---|---|---|---|
@@ -37,7 +39,7 @@ Status values:
 | Design Principles | current / future-only | current code and trackers | #2, #5, #23, #30 | P3/P10 now state current durable/outbox guarantees separately from future checkpoint/resume. |
 | §1 Environment Profiles | current | `EnvBackendConfig`, `EnvProfile`, eval loaders/runners, Slime runner | #2 | Low-level dev default is documented separately from training/eval ingress validation. |
 | §2.1-2.7 Kimina `/exec` backend | current / external-data | `EnvBackend` protocol, `KiminaEnvBackend`, remote `lean-client` lock | #7, #9, #31 | LeanFoundry client boundary is current; backend server internals still require backend-side evidence. |
-| §2.8 Validation Harness | current / external-data | search verification paths, tests, local live `/exec` e2e | #7, #31 | Harness API, latency summaries, and scripted live e2e are landed; run it over real backend trajectories before training. |
+| §2.8 Validation Harness | current / external-data | search verification paths, tests, recovered local `/exec` e2e | #7, #31 | Harness API and Docker-backed local `/exec` e2e are current; run it over real backend trajectories before training. |
 | §3.1-3.1.1 State structure / LeanTree | current / future-only | `FactorizedProofState`, expansion split logic | #10 | Current minimal state schema is separated from future LeanTree/MCGS identity research. |
 | §3.2 AND/OR UCB selection | current | `_selection.py`, runtime-tree tests | #11 | Current local PUCT/hardest-child descent is the v0 contract. |
 | §3.3 Expansion | current | `PolicyClient`, `_expansion.py`, action text storage | #12 | Policy request/history context is inference-only and wired. |
@@ -49,18 +51,18 @@ Status values:
 | §4.1 A-type data | current | `ATypeDataRecord`, SQL migration | #3, #8 | Schema nullability, backend-neutral verification naming, and examples are aligned. |
 | §4.2 B-type data | current | `TheoremRecord`, SQL migration | #2, #3 | Env/split/profile invariants are enforced at ingress where LeanFoundry owns the boundary. |
 | §4.3 Trajectories/value labels | current / future-only | `TrajectoryRecord`, `TrainingArtifacts`, SQL | #5, #8, #17, #33 | Replay/failure/eval artifacts and extraction semantics have baselines; rendered-HER remains future Path-B. |
-| §4.4 Formalizer output | current / future-only | staging schema, promotion gate, draft loop, formalizer/judge/dedup contracts | #26 | Staging header, draft/retry orchestration, HTTP formalizer contract, statement check, semantic judge contract, exact dedup hash, embedding dedup contract, difficulty mapping, and deterministic promotion gate landed; real models/services and live corpora remain future. |
+| §4.4 Formalizer output | current / future-only | staging schema, extension code absence | #26 | Core staging schema/header is current; promotion, draft/retry, formalizer, judge, dedup, and difficulty services are off-main snapshot/future work. |
 | §5 Hardware / Qwen / Phase -1 | training-repo | `leanfoundry/slime`, pyproject deps | #20, #24 | Keep hardware/model/profiling in training repo; infra only exposes metrics/artifacts. |
-| §6 Data for each stage | current / training-repo | replay protocol, extraction artifacts, Slime sample conversion | #5, #19, #20, #36, #38 | Stage data recipe is training-repo; infra durable artifacts and training-row/Sample conversion baselines are landed. |
-| §7 Training pipeline | training-repo / future-only | `leanfoundry/slime`, `proofsearch`, replay protocols | #19, #20, #22 | Stage loops not implemented here; keep consumer-facing interfaces stable. |
+| §6 Data for each stage | current / training-repo | replay protocol, extraction artifacts, Slime sample conversion | #5, #19, #20, #36, #38 | Stage data recipe is training-repo; Slime sample conversion still needs live e2e before completion claims. |
+| §7 Training pipeline | training-repo / external-data | `leanfoundry/slime`, `proofsearch`, replay protocols | #19, #20, #22 | Stage loops require live Slime/SGLang/Lean e2e before any done claim. |
 | §8 Metrics | current / training-repo | eval protocol, schemas | #23, #24 | Infra metrics/artifacts have a local baseline; training progression/W&B metrics stay training-repo owned. |
 | §8.5 Evaluation protocol | current / future-only | `EvalRunner`, `EvalArtifactManifest` | #23, #34 | Benchmark manifests, pass@k, solved@budget, contamination checks, source loaders, MiniF2F adapter, row-adapter extension point, and artifact writers landed; additional dataset adapters remain future. |
 | §9 Known risks | current / future-tuning | TODO SearchConfig exclusions, code surface | #24, #35 | Risk ownership and the max-tree/pruning stance are explicit; empirical tuning remains. |
 | §10 Repo boundary/release | current | README, AGENTS, policy/env APIs | #4, #9, #20-#22 | `lean_client` schema/client boundary, optional Slime adapter, and rollout pseudocode are aligned. |
-| §§11-16 Extension A | current / future-only | scaleout contracts | #25 | Router autoscale, binary framing, pure scheduling, reference TCP service, router-backed EnvBackend adapter, and portable-state contracts landed; production hardening, state export/import, distributed replay, and deployment actions remain future. |
-| §§17-20 Extension B | current / future-only | staging schema, promotion gate, draft loop, formalizer/judge/dedup contracts | #26 | Local deterministic formalization pipeline contracts landed; concrete model checkpoints, deployed indexes/services, calibration, and live corpus runs remain future. |
-| §§21-24 Extension C / TTT | current / future-only | TTT protocols, trace schemas, orchestration loop, promotion gate, trace replay | #27 | TTT contract, callback-driven orchestration loop, local promotion decision gate, and promoted-trace replay writes landed; MCGS/per-problem search source and concrete trainer reload remain future. |
-| §§25-32 Extension D | current / training-repo | ablation plan schemas/helpers | #28 | Frozen curriculum, arms, hard ledger, and crossed eval contract landed; actual training execution and live meter enforcement remain external. |
+| §§11-16 Extension A | off-main-snapshot / future-only | `extensions/codex-full` branch | #25 | Implementation snapshot was moved off main; current main treats scaleout as future/deferred. |
+| §§17-20 Extension B | off-main-snapshot / future-only | `extensions/codex-full` branch | #26 | Implementation snapshot was moved off main; current main treats formalization beyond core staging as future/deferred. |
+| §§21-24 Extension C / TTT | off-main-snapshot / future-only | `extensions/codex-full` branch | #27 | Implementation snapshot was moved off main; current main treats TTT as future/deferred. |
+| §§25-32 Extension D | off-main-snapshot / training-repo | `extensions/codex-full` branch | #28 | Implementation snapshot was moved off main; current main treats ablation execution as training-repo/future work. |
 | Appendix A Aristotle reference | current / reference | current search/extraction code | #10-#17, #32 | Appendix remains reference material; graph/global semantics are explicitly deferred. |
 
 ### Core Verification And Data Spine
@@ -136,9 +138,9 @@ Status values:
 
 7. §2.8 validation harness has a reusable API baseline.
    - Current search acceptance uses `/exec/verify` through `verify_one`.
-   - Resolved design text: Extension B statement checks use lean-client's
-     legacy REPL `api_check` route, while search-path proof acceptance uses
-     `/exec/verify`.
+   - Resolved design boundary: search-path proof acceptance uses
+     `/exec/verify`; future/off-main statement-check work is not search-path
+     acceptance evidence.
    - Landed: `validate_backend_case(...)` replays tree-shaped tactic
      trajectories through an injected `EnvBackend`, including focused
      `goal_group` child replays after goal-coupling splits, then verifies the
@@ -150,9 +152,10 @@ Status values:
    - Landed after the CLI: validation reports now include create/replay/verify
      and total elapsed seconds, and the CLI summary includes aggregate latency
      totals/means for live backend sweeps.
-   - Landed live smoke: `tests/test_e2e_search.py` passed against a local
-     one-worker Kimina `/exec` server on `http://127.0.0.1:8017` with
-     `LEANFOUNDRY_E2E=1`.
+   - Recovered local live smoke on 2026-07-01: Docker image
+     `zzzzhi/kimina-lean-server:9820b9a` ran on
+     `http://127.0.0.1:8017`, `/exec/limits` returned bounded caps, and
+     `tests/test_e2e_search.py` passed with `7 passed`.
    - Remaining gap: run the validation CLI against actual LeanDojo/LeanTree
      trajectories and interpret latency/cache behavior with backend telemetry.
 
@@ -279,14 +282,24 @@ Status values:
     - The push-shaped `rl_engine` placeholder has been removed.
     - `leanfoundry/slime/` now provides the pull-shaped rollout entrypoint,
       runner hooks, SGLang policy client, and row-to-Sample conversion.
-    - Pinned Slime API-compat tests pass under `[training]`.
-   - Landed: `tests/test_slime_live.py` is an opt-in live smoke that drives
-     real `async_generate_rollout` through pinned Slime, SGLang, a Lean
-     backend, and the configured tokenizer checkpoint.
-   - Landed adjacent evidence: the Lean backend side of live e2e passed through
-     `tests/test_e2e_search.py` against a local Kimina `/exec` server.
-   - Remaining gap: execute that smoke against actual services before a real
-     training run; default rollout tests still use fake Slime modules.
+    - Pinned Slime API-compat tests can run under `[training]`, but they are not
+      enough to call runtime rollout paths complete.
+    - `tests/test_slime_live.py` is the opt-in live smoke for the real
+      `async_generate_rollout` path through pinned Slime, SGLang, a Lean
+      backend, and the configured tokenizer checkpoint.
+    - Current 2026-07-01 local e2e evidence: `/exec` e2e passed against Docker
+      Kimina on `http://127.0.0.1:8017`, and Slime adapter e2e passed direct,
+      `puct_tree`, and `self_correct` with
+      `LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1`.
+    - Landed after the failed live attempt: the live smoke now covers direct,
+      `puct_tree`, and `self_correct`, requires emitted rows, and cleans up the
+      backend in the same event loop. The local generator supplies a
+      deterministic SGLang-compatible `/generate` endpoint and a temporary HF
+      tokenizer, while the real pinned Slime package and live Lean backend are
+      used.
+    - Remaining gap: execute direct/tree/self-correct Slime e2e against actual
+      deployed SGLang/Megatron services and run a trainer step before claiming
+      training readiness.
 
 21. Policy/value API examples in §10 are current.
     - Resolved: the design now separates `PolicyClient` and `ValueClient`.
@@ -302,7 +315,9 @@ Status values:
     - Landed: the long-form design now uses the current pull-shaped
       `SlimeRolloutRunner` / `async_generate_rollout` structure instead of
       obsolete push-shaped pseudocode.
-    - Remaining gap: run the harness in a configured live environment.
+    - Remaining gap: run the direct, tree, and self-correct rollout paths in a
+      configured live environment. Until that passes, pseudocode alignment is
+      not completion evidence.
 
 23. Evaluation has a runnable manifest/artifact baseline.
     - Landed: `FixedModelEvalRunner` produces `EvalArtifactManifest` with
@@ -345,141 +360,37 @@ Status values:
 
 ### Extensions
 
-25. Extension A has local contracts but no deployed scale-out system.
-    - Landed: `RouterMetrics`, `AutoscaleConfig`, `AutoscaleDecision`, and
-      `plan_router_scale(...)` encode the queue-depth autoscaling formula.
-    - Landed: `RouterCommand`, `RouterFrame`,
-      `encode_router_frame(...)`, and `decode_router_frame(...)` encode the
-      documented binary frame header with strict exact-frame decoding. Command
-      payloads remain opaque until a router adapter owns their schemas.
-    - Landed: `AsyncRouterService` provides a reference asyncio TCP service
-      over those frames: backend `REGISTER`, client `REQUEST`, backend
-      `FORWARD`, backend `RESPONSE`, client `DELIVER`, and disconnect requeue
-      are covered locally with fake stream tests.
-    - Landed: `RouterEnvBackend` and `RouterBackendWorker` carry lean-client
-      `/exec` operations over the reference router for limits, create_states,
-      one-state step_batch via `EnvBackend.step(...)`, verify, cleanup, cancel,
-      and stats.
-    - Landed: `leanfoundry-router` and `leanfoundry-router-worker` are stable
-      local process entrypoints for launching the reference router and backend
-      workers from an external supervisor.
-    - Landed: `RouterServiceSnapshot` exposes local queue/backend/client
-      diagnostics and assignment/delivery/requeue/drop counters; disconnected
-      clients drop still-pending requests.
-    - Landed: `RouterCommand.CANCEL`, `cancel_inflight_requests(...)`, and
-      `RouterBackendWorker` task cancellation provide local protocol semantics
-      for abandoned in-flight router work; late responses are dropped.
-    - Landed: `leanfoundry.scaleout.health` derives `/healthz`, `/readyz`,
-      and Prometheus-text `/metrics` endpoints from `RouterServiceSnapshot`,
-      and `leanfoundry-router --health-port ...` can serve them.
-    - Landed: `RouterState`, `register_backend(...)`,
-      `enqueue_request(...)`, `complete_request(...)`, and
-      `disconnect_backend(...)` encode deterministic FIFO scheduling,
-      per-backend CPU-slot capacity, completion drain, duplicate-id rejection,
-      and disconnect requeue for in-flight requests.
-    - Landed: `PortableStateRef` records state snapshot codec, location, hash,
-      sizes, and location-specific payload invariants.
-    - Landed: `make_inline_state_ref(...)` and `decode_inline_state_ref(...)`
-      implement RAW inline payload round-tripping with hash/size checks.
-    - Landed: `make_file_state_ref(...)` and `decode_file_state_ref(...)`
-      implement local `file://` URI payload writes/reads with payload-size,
-      decoded SHA-256, and raw-size validation.
-    - Landed: `decode_http_state_ref(...)` and `decode_uri_state_ref(...)`
-      implement read-only `http://` / `https://` URI payload fetches with
-      payload-size, codec, decoded SHA-256, and raw-size validation.
-    - Landed: the `[scaleout]` extra installs `zstandard`; default installs
-      still fail closed if ZSTD is requested, and focused tests cover real
-      ZSTD inline/file round-trips under the extra.
-    - Still missing: production router hardening/deployment, site-specific
-      supervisor manifests and metrics/pager integration, backend state
-      export/import, credentialed object-store clients and remote writes,
-      Postgres store, Redis Streams store, distributed cleanup/cancel semantics,
-      concrete backend/kernel abort guarantees, and deployment integration.
-    - Design claim that "only URLs in configuration files change" is too strong;
-      distributed cleanup/cancel, state portability, and replay-store semantics
-      need explicit adapter work.
+25. Extension A is off-main snapshot / future work.
+    - Current `main` has no `leanfoundry.scaleout` package, router CLI, router
+      worker CLI, or `[scaleout]` optional extra.
+    - The pre-split implementation snapshot is preserved on
+      `extensions/codex-full`, but it is not trusted current implementation.
+    - Any future scale-out re-import must start from current `main`, review the
+      snapshot code against the current interfaces, and pass relevant live e2e.
 
-26. Extension B has local deterministic pipeline contracts only.
-    - Landed: `formal_statements_staging` and
-      `FormalStatementStagingRecord` preserve the Lean header/import block
-      needed to produce `TheoremRecord.header`.
-    - Landed: SQLite schema version 7 backfills the staging `header` column for
-      existing DBs.
-    - Landed: `evaluate_promotion(...)` checks syntax status, semantic judge
-      score, dedup hash, and already-promoted state before building a
-      `TheoremRecord`; rejection reasons are machine-readable.
-    - Landed: exact local dedup hash helpers populate/check normalized
-      statement/header/profile hashes before promotion.
-    - Landed: `estimate_difficulty_from_quick_search(...)` maps a quick-search
-      `SearchResult` to both a bucket and the numeric
-      `difficulty_estimate: float` stored on theorem records.
-    - Landed: `KiminaStatementVerifier` and
-      `verify_staging_statement_code(...)` provide a local statement
-      syntax/type-check wrapper and update `syntax_checked` from normalized
-      lean-client `api_check` results.
-    - Landed: `HTTPSemanticJudge` provides a local semantic-judge service
-      contract, validates `[0, 1]` scores, and updates
-      `semantic_judge_score`.
-    - Landed: `run_formalization_draft_loop(...)` provides local draft/retry
-      orchestration over injected formalizer and verifier protocols, carries
-      verifier feedback between attempts, and emits accepted staging rows only
-      after syntax acceptance.
-    - Landed: `HTTPEmbeddingDeduplicator` provides a local embedding-dedup
-      service contract, validates threshold-consistent duplicate/unique
-      responses, and lets promotion optionally require a unique result.
-    - Landed: `HTTPFormalizer` provides a local formalizer service/prompt
-      contract, validates structured `lean_statement` responses, and passes
-      verifier feedback through the draft payload.
-    - Still missing: real formalizer/judge/embedding model checkpoints,
-      deployed services/indexes, judge and embedding threshold calibration,
-      running statement verifier/judge/dedup checks over real staged corpora,
-      and running quick-search difficulty estimation on real model/backend
-      results.
+26. Extension B is core staging plus off-main snapshot / future work.
+    - Current `main` keeps the durable staging table/model, including
+      `FormalStatementStagingRecord.header` and migration v7.
+    - Current `main` has no `leanfoundry.formalization` service pipeline:
+      promotion helpers, statement verifier, semantic judge, embedding dedup,
+      HTTP formalizer, and draft/retry orchestration are off-main/future.
+    - Any future autoformalization work needs live staged-corpus/backend
+      evidence before it can be called done.
 
-27. Extension C / TTT has local orchestration but no concrete trainer/search source.
-    - Landed: `leanfoundry.ttt.TTTAdapter`,
-      `AdaptablePolicyClient.with_adapter(...)`, `TTTConfig`,
-      `TTTAdapterTrainingRequest`, `TTTAdapterTrainingResult`,
-      `TTTRoundTrace`, and `TTTSessionTrace`.
-    - Landed: trace promotion to the main replay buffer is off by default, and
-      per-round traces validate adapter/reload success semantics.
-    - Landed: `run_ttt_session(...)` alternates injected search, sample
-      extraction, adapter fine-tuning, reload, policy rebinding, and re-search
-      while recording success/stop/failure traces.
-    - Landed: `evaluate_ttt_trace_promotion(...)` provides the local opt-in
-      promotion decision gate, including env-profile, trace-key dedup,
-      failed-stage, solved-status, and successful-reload checks.
-    - Landed: `TTTTraceReplayRecord`,
-      `ReplayStore.put_ttt_trace_replay_records(...)`, SQLite
-      `ttt_trace_replay`, and `persist_promoted_ttt_trace(...)` provide the
-      explicit caller-owned replay write for promoted trace artifacts.
-    - Still missing for TTT: MCGS or another approved per-problem search
-      source and concrete trainer-side fine-tuning/reload implementation.
+27. Extension C / TTT is off-main snapshot / future work.
+    - Current `main` has no `leanfoundry.ttt` package, TTT schemas, TTT replay
+      table, TTT adapter, or TTT orchestration loop.
+    - The pre-split snapshot on `extensions/codex-full` is historical material,
+      not current implementation.
+    - Future TTT still needs an approved per-problem search source, a concrete
+      trainer/reload adapter, and live end-to-end evidence.
 
-28. Extension D has a local experiment contract but no trainer.
-    - Landed: `AblationExperimentPlan`, `FrozenCurriculumManifest`, the five
-      standard training-target arms (W/W+SC/T-step/T-noval/Mix), per-arm
-      replay/checkpoint namespaces, hard generation/training/verifier ledgers,
-      `budget_account_id` consistency checks, and native crossed-eval cells.
-    - Landed: no-value arms are schema-guarded from value serving and value
-      AUC/calibration metrics.
-    - Landed: `build_frozen_curriculum_from_pass_sweep(...)` constructs a
-      deterministic frozen curriculum from complete direct pass@N verifier
-      attempts, with fail-closed checks for missing candidate evidence and
-      theorem-id mismatches.
-    - Landed: `check_budget_request(...)` evaluates one request against one
-      budget ledger cell, refuses wrong `budget_account_id`s and hard-cap
-      overruns, and returns remaining-budget diagnostics.
-    - Landed: `SQLiteBudgetMeterStore` provides local durable budget cells and
-      atomic SQLite reservations over `check_budget_request(...)`, including
-      existing-cell drift checks and concurrent local hard-cap serialization.
-    - Landed: `leanfoundry-budget-meter` exposes local init/reserve/snapshot
-      commands for JSON ledgers or plan-shaped budget objects and returns
-      nonzero when a reservation is refused.
-    - Still external: running the actual pass@N sweep on a selected model/pool,
-      optimizer execution, checkpoint production, distributed metering services,
-      worker-side live measurements, target-specific serving wrappers, and final
-      outcome reports.
+28. Extension D is training-repo / future work.
+    - Current `main` has no ablation-plan schemas, budget guard, SQLite budget
+      meter, or `leanfoundry-budget-meter` CLI.
+    - Actual pass@N sweeps, optimizer execution, checkpoint production,
+      distributed metering, serving wrappers, and outcome reports belong to the
+      downstream training/deployment stack unless explicitly reintroduced.
 
 ### Additional Coverage Findings
 
@@ -595,11 +506,18 @@ Status values:
     - Landed: LeanFoundry owns prompt/response tokenization, `response_length`,
       `loss_mask`, `lf_kind`, reward/status, and self-correct feedback masking
       in `leanfoundry/slime/samples.py`.
+    - Landed after review: `samples.py` uses Slime's native
+      `Sample.append_response_tokens(...)` when rows carry
+      `slime_response_log_probs`, and uses an explicit
+      `leanfoundry_verified_without_rollout_logprobs` fallback for verified
+      search rows because the pinned Slime API rejects trainable appended tokens
+      without rollout log-probabilities.
     - Landed: Slime runner theorem conversion and batch validation reject
       missing/default env profiles, mixed profile batches/runs, and
       theorem/backend profile mismatches unless explicit mixed routing is
       enabled.
-   - Landed: an opt-in live full-stack rollout smoke exists for SGLang plus a
-      Lean backend. The Lean-only live e2e passed against a local Kimina
-      `/exec` server; still open: run the full Slime/SGLang/Lean smoke against
-      actual services.
+    - An opt-in live full-stack rollout smoke exists for SGLang plus a Lean
+      backend. The local deterministic-generator mode now proves
+      tokenizer-backed Sample construction through real Slime and live Lean,
+      but trainer acceptance is not done until the relevant real
+      Slime/SGLang/Megatron e2e path passes.

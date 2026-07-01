@@ -81,6 +81,14 @@ mismatches are tracked in [`issues.md`](issues.md).
      only after the configured effort gate and with censored-negative weight. It
      is not policy data and not mathematical falsity.
 
+8. Branch separation
+   - `main` is the core-only implementation branch.
+   - `extensions/codex-full` is a preserved pre-split snapshot for reference.
+   - Do not merge `extensions/codex-full` wholesale into `main`. Future
+     extension work must start from current `main`, then cherry-pick or
+     re-implement reviewed pieces with fresh design review and live e2e
+     evidence.
+
 ## SearchConfig
 
 Tree search and direct whole-proof search use different budget units.
@@ -282,11 +290,11 @@ ambiguous env profiles silently contaminate the data the adapter feeds out.
   `EnvBackendConfig` keeps its dev default for direct test/client use.
 - Durable artifact shape beyond the Path-A store landed for the current spine:
   SQLite stores theorem/proof/trajectory/policy/value/lifecycle/extraction
-  failure/TTT-trace rows with deterministic ids and migrations, while eval
-  artifacts are manifest-backed files with content hashes. SQLite migrations
-  now run through an ordered registry, with upgrade coverage for legacy
-  v4/v5/v6/v7 DBs into the current v8 schema. Stable-schema release governance
-  is documented in `docs/design/schema_release_governance.md`.
+  failure/negation/staging rows with deterministic ids and migrations, while
+  eval artifacts are manifest-backed files with content hashes. SQLite
+  migrations now run through an ordered registry, with upgrade coverage for
+  legacy v4/v5/v6 DBs into the current v7 schema. Stable-schema release
+  governance is documented in `docs/design/schema_release_governance.md`.
 - Fixed-model eval runner baseline landed: `FixedModelEvalRunner` uses
   `run_search_batch`, reports direct/self-correct pass@k from verifier attempt
   indices, tree solved@budget from `max_tactic_calls`, status counts, and basic
@@ -330,11 +338,12 @@ ambiguous env profiles silently contaminate the data the adapter feeds out.
   leanfoundry.env_backend.validation_cli` loads JSON/JSONL validation cases,
   enforces one `env_profile` per run, exits nonzero on failed reports, and
   emits per-case plus aggregate create/replay/verify/total latency seconds.
-  Live scripted `/exec` e2e landed against a local Kimina server:
-  `tests/test_e2e_search.py` passed with `LEANFOUNDRY_E2E=1` against
-  `http://127.0.0.1:8017`. Remaining: supply real LeanDojo/LeanTree validation
-  cases, run the CLI in the target deployment, and interpret latency/cache
-  behavior with backend telemetry before a real training run.
+  Recovered local `/exec` e2e passed in this workspace by starting the bounded
+  one-worker Kimina Docker backend on `http://127.0.0.1:8017`; see the current
+  audit boundary below for the exact command/result. Remaining: supply real
+  LeanDojo/LeanTree validation cases, run the CLI in the target deployment, and
+  interpret latency/cache behavior with backend telemetry before a real
+  training run.
 - Attempt-lifecycle baseline landed: bounded cleanup now records deferred item
   ids, cancel unwind records item statuses/failures when a replay store is
   present, and SQLite persists `attempt_lifecycle_outbox` rows with retry count,
@@ -365,25 +374,34 @@ Remaining Phase-2-adjacent work:
 
 ### Phase 3 — Slime adapter (first working training loop)
 Baseline built under `leanfoundry/slime/`: `SGLangPolicyClient`,
-`SlimeRolloutRunner`, `samples.py`, and `rollout.py`. It owns row-to-Sample
-token/loss-mask construction, metadata validation, rollout composition, and the
-pull-shaped `generate_rollout` entrypoint. The push-shaped `rl_engine/` package
-is deleted.
+`SlimeRolloutRunner`, `samples.py`, `rollout.py`, and `arguments.py`. It owns
+row-to-Sample token/loss-mask construction, metadata validation, rollout
+composition, the pull-shaped `generate_rollout` entrypoint, and the
+`add_leanfoundry_arguments` hook for LeanFoundry-owned Slime args. The
+push-shaped `rl_engine/` package is deleted.
 Remaining Phase 3 work:
-- Run the adapter under `[training]` against the pinned Slime package, SGLang,
-  and a Lean backend; an opt-in live smoke harness now exists, but it still
-  needs to be executed in a configured deployment environment.
+- Run the adapter under the real downstream Slime/Megatron trainer objective
+  and weight-sync loop. Local adapter e2e now passes with a deterministic
+  SGLang-compatible generator, and tiny real-SGLang tree EI passes one local
+  optimizer step, but those do not prove trainer-objective acceptance.
 - Fake integration coverage landed for grouped/callable `data_source` inputs,
   tokenizer loading from `args.hf_checkpoint`, and `RolloutFnEvalOutput`.
   Opt-in live-smoke coverage landed in `tests/test_slime_live.py`: with
   `[training]`, `LEANFOUNDRY_SLIME_E2E=1`, a Lean API URL/profile, SGLang
   router address, and HF checkpoint, it drives real `async_generate_rollout`
-  through direct whole-proof search. Remaining: run it against actual services
-  before a real training run.
+  through direct, `puct_tree`, and `self_correct` search and requires at least
+  one emitted row.
 - Real self-correct rows landed once `SelfCorrectTrace` was added; the adapter
   carries them through existing `TrainingSegment` / loss-mask construction.
 - Slime API-compat is pinned and drift-tested (#20, landed): bump the commit
   deliberately and re-run `pytest -m slime`.
+- Slime `Sample` construction is settled at the adapter/API level:
+  `samples.py` uses native `Sample.append_response_tokens(...)` when a row
+  carries `slime_response_log_probs`; otherwise, verified LeanFoundry search
+  rows use an explicit `leanfoundry_verified_without_rollout_logprobs`
+  construction path because the pinned Slime API rejects trainable appended
+  tokens without rollout log-probabilities. Remaining: prove real trainer
+  acceptance in the live stack.
 
 ### Phase 4 — Extraction hardening
 - Step-level extraction baseline landed: every proved runtime action now emits a
@@ -462,142 +480,79 @@ adapter loop but is not optional for the full Aristotle-like implementation.
 - Tactic beam, optimistic/RMaxTS, graph/MCGS: off the core path until replay/eval
   proves the direct/tree/best-first baseline; graph/MCGS also needs a complete
   state-identity fingerprint.
-- Extension A scale-out contracts landed: `leanfoundry.scaleout` records router
-  metrics/autoscale decisions, binary router frame codecs, pure router
-  scheduling transitions, a reference asyncio TCP router service, router-backed
-  EnvBackend adapters, and portable state snapshot references.
-  `RouterFrame`, `RouterCommand`, `encode_router_frame(...)`, and
-  `decode_router_frame(...)` now implement the documented network-byte-order
-  frame header with strict exact-frame decoding; payloads remain opaque bytes
-  until a router adapter owns command-specific request bodies.
-  `AsyncRouterService` now accepts backend `REGISTER` connections, routes
-  client `REQUEST` frames to backends as `FORWARD`, delivers backend
-  `RESPONSE` frames to clients as `DELIVER`, and requeues in-flight work after
-  backend disconnects.
-  `RouterServiceSnapshot` / `AsyncRouterService.snapshot()` now expose local
-  queue/backend/client/counter diagnostics, and disconnected clients drop
-  still-pending requests instead of leaving them queued forever.
-  `RouterCommand.CANCEL`, `cancel_inflight_requests(...)`, and
-  `RouterBackendWorker` task cancellation now give abandoned in-flight router
-  work a local cancellation protocol; late responses are dropped. Concrete Lean
-  kernel/backend cancellation remains best-effort and backend-owned.
-  `leanfoundry.scaleout.health` now derives local `/healthz`, `/readyz`, and
-  Prometheus-text `/metrics` responses from `RouterServiceSnapshot`, and
-  `leanfoundry-router --health-port ...` can serve them for a site supervisor.
-  `RouterEnvBackend` / `RouterBackendWorker` now carry lean-client `/exec`
-  operations over those frames for limits, create_states, one-state
-  step_batch, verify, cleanup, cancel, and stats while preserving the
-  one-proof-state expansion scheduler unit.
-  `leanfoundry-router` and `leanfoundry-router-worker` now provide stable
-  local process entrypoints for a site supervisor to launch the reference
-  router and backend workers.
-  `RouterState` plus `register_backend(...)`, `enqueue_request(...)`,
-  `complete_request(...)`, and `disconnect_backend(...)` now cover FIFO
-  assignment to idle backend slots, completion drain, duplicate-id rejection,
-  and disconnect requeue for in-flight requests.
-  `make_inline_state_ref(...)` / `decode_inline_state_ref(...)` now implement
-  RAW inline state-payload encoding, decoding, and integrity checks.
-  `make_file_state_ref(...)` / `decode_file_state_ref(...)` now implement
-  local `file://` URI payload writes/reads with payload-size and decoded-state
-  integrity checks. `decode_http_state_ref(...)` and `decode_uri_state_ref(...)`
-  now support read-only `http://` / `https://` URI payload fetches with the same
-  validation, suitable for public or signed object-store URLs. The `[scaleout]`
-  extra now installs `zstandard` and tests real ZSTD inline/file state-ref
-  round-trips; default installs still fail closed when ZSTD is requested.
-  Remaining: production router
-  hardening/deployment, site-specific supervisor manifests and metrics/pager
-  integration, backend state export/import, credentialed object-store clients
-  and remote writes, Postgres or Redis replay store, distributed cleanup/cancel
-  semantics, concrete backend/kernel abort guarantees, and deployment
-  integration.
-- Extension B promotion contract landed: staging rows preserve the Lean header,
-  schema version 7 backfills legacy staging rows, and
-  `evaluate_promotion(...)` converts syntax-checked / judged / deduped staging
-  rows into `TheoremRecord`s or returns rejection reasons.
-  `verify_staging_statement_code(...)`, `KiminaStatementVerifier`, and
-  `staging_record_with_syntax_result(...)` now provide a local statement
-  syntax/type-check wrapper over lean-client's legacy REPL `api_check` route
-  and update the staging `syntax_checked` gate field from normalized results.
-  `HTTPSemanticJudge`, `parse_semantic_judge_response(...)`, and
-  `staging_record_with_semantic_judge_result(...)` now provide a local
-  semantic-judge service contract and populate `semantic_judge_score` from a
-  validated `[0, 1]` score; promotion still owns thresholding.
-  `run_formalization_draft_loop(...)` now provides local draft/retry
-  orchestration over an injected `Formalizer` and `StatementVerifier`, carries
-  verifier feedback into the next attempt, and returns a staging row only after
-  syntax acceptance.
-  `HTTPFormalizer`, `formalizer_payload(...)`, and
-  `parse_formalizer_response(...)` now provide the concrete service/prompt
-  contract for model-backed statement drafting: payloads carry the staging id,
-  informal statement, env profile, header, attempt index, and verifier
-  feedback, and responses must contain a structured non-empty
-  `lean_statement`.
-  `formal_statement_dedup_hash(...)` and
-  `staging_record_with_dedup_hash(...)` provide exact local
-  statement/header/profile dedup hashes, and
-  `estimate_difficulty_from_quick_search(...)` maps quick-search results to the
-  numeric `difficulty_estimate` field.
-  `HTTPEmbeddingDeduplicator`, `embedding_dedup_payload(...)`, and
-  `parse_embedding_dedup_response(...)` now provide a local embedding-dedup
-  service contract, and
-  `PromotionGateConfig(require_embedding_unique=True)` lets promotion reject
-  missing, errored, or duplicate embedding-dedup results. Remaining: real
-  formalizer/judge/embedding model checkpoints, deployed services/indexes,
-  judge and embedding threshold calibration, running the statement
-  verifier/judge/dedup checks over real staged corpora, and running
-  quick-search difficulty estimation on real model/backend results.
-- Extension C TTT contract landed: `leanfoundry.ttt` exposes trainer/reload
-  protocols, `TTTConfig`, adapter request/result schemas, and per-round/session
-  traces with main-replay promotion off by default. `run_ttt_session(...)`
-  now provides a generic callback-driven loop over search, sample extraction,
-  fine-tune, reload, and policy rebinding. `evaluate_ttt_trace_promotion(...)`
-  now provides the local opt-in promotion decision gate with env-profile,
-  trace-key dedup, failed-stage, solved-status, and successful-reload checks.
-  Promoted trace replay writes landed through `TTTTraceReplayRecord`,
-  `ReplayStore.put_ttt_trace_replay_records(...)`, SQLite
-  `ttt_trace_replay`, and `persist_promoted_ttt_trace(...)`. These rows store
-  trace artifacts and promotion decisions only; they are not synthetic
-  policy/value/A-type training rows. Remaining: MCGS or another approved
-  per-problem search source and concrete trainer-side fine-tune/reload.
-- Extension D ablation contract landed: `AblationExperimentPlan` records the
-  frozen curriculum, W/W+SC/T-step/T-noval/Mix arms, per-arm
-  replay/checkpoint namespaces, hard generation/training/verifier ledgers,
-  `budget_account_id` checks, and native crossed-eval cells.
-  `build_frozen_curriculum_from_pass_sweep(...)` now constructs the frozen pool
-  deterministically from complete direct pass@N verifier-attempt evidence.
-  `check_budget_request(...)` now applies one ledger cell to one observed usage
-  snapshot and refuses account mismatches or hard-cap overruns.
-  `SQLiteBudgetMeterStore` now provides local durable meter cells and atomic
-  SQLite reservations using that guard, including drift checks for existing
-  cells and hard-cap serialization across concurrent local callers.
-  `leanfoundry-budget-meter` now exposes init/reserve/snapshot commands for
-  scripts and returns nonzero when a reservation is refused.
-  Remaining: run the actual pass@N sweep on the selected model/pool, run
-  training in the downstream repo, wire distributed meter services and
-  worker-side live measurements in deployment, and write final outcome reports.
+- Extensions A-D are not current `main` implementation. The pre-split snapshot
+  is preserved on `extensions/codex-full`; any future extension work should
+  start from current `main`, re-import only reviewed pieces, and require live
+  e2e evidence before being called done.
+- Extension B's core staging table/header migration remains part of the durable
+  spine. The autoformalization service pipeline beyond that is off-main/future.
 
-## Current Local Audit Boundary — 2026-06-30
+## Current Local Audit Boundary — 2026-07-01
 
-The local implementation baseline is green through:
+The current branch is core-only after the extension split. The previous
+extension implementation snapshot is preserved on `extensions/codex-full`, but
+Extension A-D code is not trusted current `main` implementation.
 
-- `uv run --no-dev --with pytest pytest -q` -> 336 passed, 8 skipped.
+Completion claims are live-e2e gated. Hermetic tests, fake transports, skipped
+e2e tests, import-only compat checks, and checklist docs are not enough to call
+a runtime path done.
+
+Current local live-e2e evidence:
+
+- Recovered local `/exec` e2e by starting Docker image
+  `zzzzhi/kimina-lean-server:9820b9a` as `leanfoundry-e2e-8017` on
+  `http://127.0.0.1:8017` with one Pantograph worker, one Lean process per
+  env profile, one in-flight exec request, and four queued requests.
+- `curl http://127.0.0.1:8017/exec/limits` returned bounded caps, including
+  `max_pantograph_workers=1`, `max_lean_processes_per_env_profile=1`,
+  `max_in_flight_exec_requests=1`, and `allow_unbounded_exec=false`.
 - `LEANFOUNDRY_E2E=1 LEANFOUNDRY_E2E_API_URL=http://127.0.0.1:8017
-  LEANFOUNDRY_E2E_ENV_PROFILE=default uv run --no-dev --with pytest pytest -q
-  tests/test_e2e_search.py` -> 7 passed against a local one-worker Kimina
-  `/exec` server.
-- `uv run --no-dev --with flake8 flake8 leanfoundry tests` -> passed.
-- `uv run --extra training pytest -m slime tests/test_slime_compat.py
-  tests/test_slime_live.py -q` -> 3 passed, 1 skipped.
-- `uv lock --check` -> passed.
-- `git diff --check` -> passed.
+  LEANFOUNDRY_E2E_ENV_PROFILE=default uv run --no-dev --with pytest
+  pytest -q tests/test_e2e_search.py` passed: `7 passed`.
+- Local Slime adapter e2e now passes without an externally deployed router by
+  setting `LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1`. That starts a
+  deterministic SGLang-compatible `/generate` service and temporary HF
+  tokenizer while still using the real pinned Slime package, real
+  `async_generate_rollout`, and the live Lean backend:
+  `LEANFOUNDRY_SLIME_E2E=1 LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1
+  LEANFOUNDRY_SLIME_E2E_LEAN_API_URL=http://127.0.0.1:8017
+  LEANFOUNDRY_SLIME_E2E_ENV_PROFILE=mathlib uv run --extra training
+  pytest -q -m "slime and e2e" tests/test_slime_live.py --tb=short`
+  passed: `3 passed`.
+- Real SGLang is installed locally in ignored `.venv-sglang` and can launch:
+  `sglang 0.5.9`, `torch 2.9.1+cu128`, `transformers 4.57.1`. A real server
+  was started on GPU 6 at `http://127.0.0.1:30000` with
+  `Qwen/Qwen2.5-0.5B-Instruct`; it loaded a local HF snapshot and served
+  `/generate`. Running the same Slime live smoke against that real server
+  reached SGLang and Lean but exhausted all three modes with `lf_rows=0`
+  because the small general checkpoint did not emit valid Lean
+  proof/tactic text under the current raw prompts.
+- Real SGLang tree EI now has a tiny opt-in e2e:
+  `tests/test_slime_tree_ei_live.py` writes a tiny random GPT-2 checkpoint,
+  launches real SGLang from `.venv-sglang`, runs `puct_tree` through live Lean,
+  asserts a tactic-level Slime `Sample`, and performs one local `torch`
+  optimizer step over the sample `tokens` / `response_length` / `loss_mask`.
+  This caught and fixed a real data-contract bug: tree Slime rollouts now
+  suppress rendered `whole_proof` rows by default and emit lineage-A tactic rows
+  unless `lf_include_tree_whole_proof_rows=True` is set.
 
-Remaining work is intentionally not hidden as "todo code" in the current core:
+Current non-live validation should still be run after edits, but passing it is
+only patch hygiene, not completion evidence.
 
-- **Live/external validation:** local scripted `/exec` e2e passed and the
-  backend validation CLI now emits latency summaries; still run it over real
-  LeanDojo/LeanTree trajectories, run the opt-in Slime/SGLang/Lean live smoke,
-  and interpret backend cache behavior plus deployment lifecycle behavior in
-  the target environment.
+Remaining core work is intentionally not hidden as "todo code":
+
+- **Live/e2e validation:** local `/exec` search e2e now passes; still run the
+  backend validation CLI on real LeanDojo/LeanTree trajectories. Local Slime
+  adapter e2e passes with the deterministic generator, and real SGLang serving
+  has been installed/started locally. A tiny real-SGLang tree EI optimizer-step
+  e2e passes. Still run against a Lean-capable deployed SGLang/Megatron
+  checkpoint before claiming deployment readiness.
+- **Core Slime correctness:** adapter-level token/loss-mask construction is
+  settled and tested against the pinned Slime `Sample` contract, and tree
+  samples feed a tiny local optimizer step. Still prove the emitted samples are
+  accepted by the real Slime/Megatron trainer objective and weight-sync loop.
+- **Tree rollout grouping:** prove ragged tree-mode groups in a real Slime
+  training/rollout path before claiming tree-mode training support complete.
 - **Dataset-specific adapters:** add concrete `BenchmarkRowAdapter`s only after
   selecting public datasets whose native rows are not already LeanFoundry
   theorem JSONL.
@@ -612,6 +567,6 @@ Remaining work is intentionally not hidden as "todo code" in the current core:
   orchestration wait for replay/eval evidence, state-identity design, backend
   proof/script support, or a concrete trainer adapter.
 
-Do not treat these as silently complete. They are either external runs,
-site-specific integration, training-repo work, or explicitly gated future
+Do not treat these as silently complete. They need live-e2e evidence, external
+runs, site-specific integration, training-repo work, or explicitly gated future
 research/engineering.

@@ -3,6 +3,119 @@
 This file records completed implementation slices and review follow-ups. Keep
 future-facing plans in [`todo.md`](todo.md).
 
+## 2026-07-01: Core-Only Mainline And E2E Completion Gate
+
+Reconciled current docs/package metadata after the extension split.
+
+- Recorded the repo rule that runtime paths are not done until their relevant
+  live e2e has actually run and passed. Hermetic tests, fake transports,
+  skipped e2e tests, import-only checks, and checklist text are patch hygiene,
+  not completion evidence.
+- Updated `AGENTS.md`, `CLAUDE.md`, the v11 design note, `todo.md`, and
+  `issues.md` so current `main` is described as core-only. The pre-split
+  Extension A-D snapshot remains on `extensions/codex-full`, but it is not
+  trusted current implementation.
+- Recorded the branch-separation rule: do not merge `extensions/codex-full`
+  wholesale into `main`; future extension work must start from current `main`
+  and cherry-pick or re-implement reviewed pieces with fresh live e2e evidence.
+- Removed stale extension console scripts and the `[scaleout]` optional extra
+  from package metadata because `main` no longer contains the corresponding
+  packages.
+- Corrected the durable-spine tracker from the off-main v8/TTT replay story to
+  the current mainline v7 formal-staging-header schema.
+
+Live e2e evidence from this workspace:
+
+- Initial probes to `http://127.0.0.1:8000/exec/limits` and
+  `http://127.0.0.1:8017/exec/limits` failed with connection refused.
+- Recovered the local `/exec` e2e by starting Docker image
+  `zzzzhi/kimina-lean-server:9820b9a` as `leanfoundry-e2e-8017` on
+  `http://127.0.0.1:8017` with one Pantograph worker and bounded admission
+  caps.
+- `LEANFOUNDRY_E2E=1 LEANFOUNDRY_E2E_API_URL=http://127.0.0.1:8017
+  LEANFOUNDRY_E2E_ENV_PROFILE=default uv run --no-dev --with pytest
+  pytest -q tests/test_e2e_search.py` -> 7 passed.
+- Forced Slime/SGLang/Lean smoke did not prove rollout execution. The rerun
+  against the live Lean backend failed cleanly with `lf_rows=0` and
+  `lf_status_error=1` because no SGLang router was reachable on port 30000.
+- Hardened the Slime live harness/runner around that boundary:
+  `SlimeRolloutRunner.to_samples(...)` no longer loads a tokenizer for empty
+  row lists, and `tests/test_slime_live.py` now requires `lf_rows > 0` with
+  metric-bearing assertions.
+- Added a local deterministic SGLang-compatible generator for
+  `tests/test_slime_live.py`. `LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1` starts a
+  `/generate` HTTP server, creates a temporary HF tokenizer checkpoint, and
+  drives the real pinned Slime `async_generate_rollout` path against the live
+  Lean backend. With the Docker Kimina server on `http://127.0.0.1:8017`,
+  `LEANFOUNDRY_SLIME_E2E=1 LEANFOUNDRY_SLIME_E2E_LOCAL_GENERATOR=1
+  LEANFOUNDRY_SLIME_E2E_LEAN_API_URL=http://127.0.0.1:8017
+  LEANFOUNDRY_SLIME_E2E_ENV_PROFILE=mathlib uv run --extra training
+  pytest -q -m "slime and e2e" tests/test_slime_live.py --tb=short`
+  passed: 3 passed.
+- Installed real SGLang into ignored `.venv-sglang` instead of mutating the
+  LeanFoundry project environment. The installed runtime reports
+  `sglang 0.5.9`, `torch 2.9.1+cu128`, and `transformers 4.57.1`. A real
+  SGLang server launched on GPU 6 at `http://127.0.0.1:30000` with
+  `Qwen/Qwen2.5-0.5B-Instruct`, loaded a local HF snapshot, and answered
+  `/generate`. Running `tests/test_slime_live.py` against that real server
+  reached SGLang and Lean but exhausted direct, `puct_tree`, and `self_correct`
+  with zero rows because the small general checkpoint did not emit valid Lean
+  proof/tactic text under the current raw prompts.
+- Added SGLang-shaped sampling-parameter wiring to
+  `leanfoundry/slime/policy.py`. Slime/SGLang policy calls can now pass
+  `lf_tactic_*` / `lf_proof_*` options such as `max_new_tokens` and
+  `logit_bias`; generic `max_tokens` overrides are translated to SGLang's
+  `max_new_tokens` key. This fixes the real-server payload mismatch seen with
+  raw SGLang `/generate`.
+- Added `leanfoundry.slime.add_leanfoundry_arguments(parser)`, a Slime
+  `parse_args(add_custom_arguments=...)` provider for LeanFoundry-owned
+  `lean_*` and `lf_*` flags. The downstream training repo no longer needs to
+  duplicate the adapter's flag inventory; Slime still owns native
+  `--hf-checkpoint`, rollout-batch, and SGLang-router arguments. Focused
+  adapter tests cover parser defaults, mode choices, and CLI sampling strings
+  flowing into SGLang payload fields.
+- Validation after adding the parser hook: default suite
+  `uv run --no-dev --with pytest pytest -q` -> 219 passed, 11 skipped; full
+  `flake8 leanfoundry tests` passed; `uv lock --check && git diff --check`
+  passed; Slime marker tests passed with live tests skipped by default
+  (`4 passed, 4 skipped`); live deterministic Slime/Lean smoke passed
+  (`tests/test_slime_live.py` -> 3 passed); live real-SGLang tree EI smoke
+  passed (`tests/test_slime_tree_ei_live.py` -> 1 passed).
+- Added `tests/test_slime_tree_ei_live.py`, an opt-in tiny tree-search EI e2e
+  that writes a tiny random GPT-2 HF checkpoint, launches a real SGLang server,
+  runs `puct_tree` through live Lean, asserts the emitted Slime sample is a
+  tactic row (`response="trivial"`), and performs one real `torch` optimizer
+  step over the emitted `tokens` / `response_length` / `loss_mask` contract.
+  With the Docker Kimina server on `http://127.0.0.1:8017` and
+  `.venv-sglang`, this passed:
+  `LEANFOUNDRY_SLIME_TREE_EI_E2E=1
+  LEANFOUNDRY_SLIME_E2E_LEAN_API_URL=http://127.0.0.1:8017
+  LEANFOUNDRY_SLIME_E2E_ENV_PROFILE=mathlib
+  LEANFOUNDRY_SGLANG_PYTHON=/home/zhiwang/LeanFoundry/.venv-sglang/bin/python
+  LEANFOUNDRY_TREE_EI_E2E_CUDA_VISIBLE_DEVICES=6 uv run --extra training
+  pytest -q -m "slime and e2e" tests/test_slime_tree_ei_live.py --tb=short`
+  -> 1 passed.
+- The first tree EI run exposed a real extraction mismatch: tree search was
+  emitting a verified rendered `whole_proof` row before the lineage-A tactic
+  row. `leanfoundry/slime/rollout.py` now suppresses whole-proof rows for tree
+  algorithms by default; direct and self-correct still emit lineage-B rows.
+  `lf_include_tree_whole_proof_rows=True` is the explicit opt-in if a downstream
+  experiment wants tree-rendered whole proofs as enrichment/audit data.
+- Resolved the Slime `append_response_tokens(...)` review point at the adapter
+  boundary. The pinned Slime API requires rollout log-probabilities for
+  trainable appended tokens, so `leanfoundry/slime/samples.py` now uses native
+  append only when rows carry `slime_response_log_probs`; verifier-grounded
+  LeanFoundry search rows without SGLang rollout log-probs use an explicit
+  `leanfoundry_verified_without_rollout_logprobs` construction path. Tests now
+  cover both paths and assert the real pinned Slime class rejects trainable
+  append without log-probs.
+- Expanded `tests/test_slime_live.py` from direct-only to direct, `puct_tree`,
+  and `self_correct` modes via `LEANFOUNDRY_SLIME_E2E_MODES`; the smoke still
+  remains opt-in. The deterministic local-generator mode passed locally; the
+  real SGLang tree EI test above passed against a tiny SGLang-served checkpoint.
+  This is still not a full Megatron/Slime trainer run or weight-sync/reload
+  proof.
+
 ## 2026-06-19: Scaffold And Backend Contract
 
 - Added the first schema/interface scaffold and plain-language field
