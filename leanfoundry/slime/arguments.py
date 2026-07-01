@@ -29,10 +29,19 @@ def _add_lean_backend_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lean-api-url", type=str, default=None)
     parser.add_argument("--lean-api-key", type=str, default=None)
     parser.add_argument("--lean-env-profile", type=str, default=None)
-    parser.add_argument("--lean-timeout-ms", type=int, default=5000)
+    # Blanket per-call Lean budget; the client fans this out to both
+    # acquire (wait-for-worker) and step (tactic compute) when those are
+    # unset. 120s tolerates slow Mathlib tactics and light pool contention
+    # while staying well under the server's 600_000ms cap so runaway tactics
+    # are still reaped.
+    parser.add_argument("--lean-timeout-ms", type=int, default=120000)
     parser.add_argument("--lean-acquire-timeout-ms", type=int, default=None)
     parser.add_argument("--lean-step-timeout-ms", type=int, default=None)
-    parser.add_argument("--lean-http-timeout-seconds", type=int, default=60)
+    # Client-side HTTP read timeout. A cold `import Mathlib` worker boot is
+    # awaited inline in the request and bounded server-side by
+    # worker_startup_timeout_seconds (600s), so the client must wait at least
+    # that long or it aborts a boot the server would have finished.
+    parser.add_argument("--lean-http-timeout-seconds", type=int, default=600)
     parser.add_argument("--lean-retries", type=int, default=3)
     parser.add_argument("--lean-max-overloaded-retries", type=int, default=0)
     parser.add_argument(

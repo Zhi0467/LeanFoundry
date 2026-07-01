@@ -275,7 +275,8 @@ def test_add_leanfoundry_arguments_registers_adapter_flags() -> None:
 
     assert args.lean_api_url == "http://lean"
     assert args.lean_env_profile == "mathlib"
-    assert args.lean_timeout_ms == 5000
+    assert args.lean_timeout_ms == 120000
+    assert args.lean_http_timeout_seconds == 600
     assert args.lf_search_algorithm == "direct"
     assert args.lf_use_value_client is True
     assert args.lf_value_mode == "bonded"

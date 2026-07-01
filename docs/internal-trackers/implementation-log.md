@@ -3,6 +3,27 @@
 This file records completed implementation slices and review follow-ups. Keep
 future-facing plans in [`todo.md`](todo.md).
 
+## 2026-07-01: Lean Timeout Defaults For Mathlib Cold Boot
+
+Raised the adapter's default Lean timeouts after tracing the Kimina backend.
+The Mathlib `import` cost is a per-worker cold-boot bounded server-side by
+`worker_startup_timeout_seconds` (600s, `pantograph_manager.get_worker` uses
+`max(acquire, worker_startup_timeout_seconds)`), decoupled from the per-call
+`step_timeout_ms`. So a small `step_timeout` never kills the load. The only
+real coupling was the client HTTP read timeout: the boot is awaited inline in
+the request, and LeanFoundry was overriding the lean_client's own 600s default
+down to 60s, aborting a boot the server would have finished.
+
+- `lean_http_timeout_seconds` default 60 -> 600 (matches the server startup
+  budget and the lean_client default) in `slime/arguments.py` and
+  `slime/runner.py`.
+- `lean_timeout_ms` default 5000 -> 120000 (blanket acquire/step fallback):
+  tolerates slow Mathlib tactics and light pool contention, still well under
+  the server `max_step_timeout_ms`/`max_acquire_timeout_ms` cap (600_000) so
+  runaway tactics are reaped. `step`/`acquire` stay unset and inherit it.
+- Do not inflate `step_timeout_ms` to cover cold boot; it is out of that scope
+  and `step_timeout_ms > max_step_timeout_ms` is rejected by the server.
+
 ## 2026-07-01: Core-Only Mainline And E2E Completion Gate
 
 Reconciled current docs/package metadata after the extension split.

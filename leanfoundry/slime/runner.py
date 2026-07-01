@@ -45,13 +45,13 @@ class SlimeRolloutRunner:
                 api_url=_required_arg(args, "lean_api_url"),
                 env_profile=env_profile,
                 api_key=_arg(args, "lean_api_key", None),
-                timeout_ms=_arg(args, "lean_timeout_ms", 5000),
+                timeout_ms=_arg(args, "lean_timeout_ms", 120000),
                 acquire_timeout_ms=_arg(args, "lean_acquire_timeout_ms", None),
                 step_timeout_ms=_arg(args, "lean_step_timeout_ms", None),
                 http_timeout_seconds=_arg(
                     args,
                     "lean_http_timeout_seconds",
-                    60,
+                    600,
                 ),
                 retries=_arg(args, "lean_retries", 3),
                 max_overloaded_retries=_arg(
