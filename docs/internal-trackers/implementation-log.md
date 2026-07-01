@@ -3,6 +3,47 @@
 This file records completed implementation slices and review follow-ups. Keep
 future-facing plans in [`todo.md`](todo.md).
 
+## 2026-07-01: Slime Trainer Data Boundary Coverage
+
+Pushed the tree compact-fanout check past the scheduler into Slime's
+trainer-side data boundary.
+
+- Added `megatron-core==0.18.0` and `torch-memory-saver==0.0.9.post1` to the
+  `[training]` extra for Linux/Python >= 3.12. These are required to import and
+  exercise Slime's Megatron train-data utilities; SGLang remains isolated in
+  `.venv-sglang` because installing `sglang` into the project venv would replace
+  large core packages (`torch`, `transformers`, CUDA wheels, `openai`, etc.).
+- Extended `tests/test_slime_compat.py` so compact tree fanout now runs through
+  pinned Slime `RolloutManager._convert_samples_to_train_data(...)`,
+  `_split_train_data_by_dp(...)`, `process_rollout_data(...)`, and Megatron
+  `DataIterator`. The test asserts trainer-side `rollout_ids == [0, 0, 2]`,
+  `rollout_mask_sums == [11, 11, 5]`, `global_batch_sizes == [2]`, and three
+  one-sample microbatches.
+- Verified the next full-trainer boundary. Importing
+  `slime.backends.megatron_utils.actor.MegatronTrainRayActor` from the installed
+  pinned Slime package gets past Megatron and `torch_memory_saver`, then fails
+  because the installed package omits the source
+  `slime/backends/megatron_utils/kernels` directory. Putting the pinned Slime
+  source checkout on `PYTHONPATH` gets past that and then fails on missing
+  `sglang`, which is expected because the project venv intentionally does not
+  install SGLang. So the remaining proof is a real trainer-image run, not
+  another LeanFoundry adapter unit test.
+
+Validation:
+
+- `uv lock` passed after adding the marked training dependencies.
+- `uv run --no-dev --with pytest pytest -q` -> 222 passed, 11 skipped.
+- `uv run --extra training pytest -q -m slime` -> 6 passed, 4 skipped,
+  223 deselected.
+- `uv run --no-dev --with flake8 flake8 leanfoundry tests` passed.
+- `uv lock --check && git diff --check` passed.
+- Live deterministic Slime/Lean smoke with Docker Kimina on
+  `http://127.0.0.1:8017` passed all modes:
+  `tests/test_slime_live.py` -> 3 passed.
+- Live real-SGLang tree EI smoke with compact fanout assertions and one local
+  optimizer step passed:
+  `tests/test_slime_tree_ei_live.py` -> 1 passed.
+
 ## 2026-07-01: Slime Tree Compact Fanout Rollout IDs
 
 Fixed the Slime tree-row grouping path before the downstream trainer handoff.

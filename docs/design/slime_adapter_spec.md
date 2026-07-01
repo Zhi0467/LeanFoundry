@@ -267,6 +267,17 @@ class Sample:
 > proving that two theorem searches with three emitted step samples schedule as
 > two rollouts. This is scheduler-contract evidence; a full Slime/Megatron
 > train step with `loss_type=sft_loss` is still the remaining live check.
+>
+> **2026-07-01:** The local training compatibility path now reaches Slime's
+> trainer-side data boundary. With `megatron-core` and `torch-memory-saver` in
+> the `[training]` extra, `tests/test_slime_compat.py` runs compact tree fanout
+> through the pinned Slime `RolloutManager` conversion/split methods,
+> `process_rollout_data(...)`, and Megatron `DataIterator`. It asserts the
+> train-side rollout ids, per-rollout mask sums, global batch sizes, and
+> microbatch indices consumed by the model actor iterator. The full actor/model
+> step remains live-stack gated because the project venv intentionally does not
+> install SGLang and the pinned installed Slime package omits its source
+> `megatron_utils/kernels` package.
 - C6. Tokenizer source and token/loss-mask semantics. The adapter is responsible
   for constructing the exact tokens the trainer consumes. It must use Slime's
   configured tokenizer/checkpoint (or verified SGLang token ids when returned),
@@ -621,6 +632,11 @@ Under `[training]` (marker `slime`, skipped by default):
   aligned; self-correct masks feedback spans; direct groups and tree compact
   fanout groups follow §7; all tree sibling samples share
   `Sample.rollout_id`.
+- Slime trainer-data boundary: compact tree fanout passes through pinned Slime
+  `RolloutManager._convert_samples_to_train_data(...)`,
+  `_split_train_data_by_dp(...)`, `process_rollout_data(...)`, and Megatron
+  `DataIterator`, preserving rollout ids, `rollout_mask_sums`,
+  `global_batch_sizes`, and `micro_batch_indices`.
 - An opt-in live smoke (`tests/test_slime_live.py`) against a stub
   `data_source`, a live SGLang-compatible router, a live Lean backend, and a HF
   tokenizer checkpoint. It exercises direct, `puct_tree`, and `self_correct`,
@@ -649,6 +665,8 @@ groups (§7) · C6 tokenizer/token/loss-mask construction.
 
 Resolved in the baseline: C1, C3, C4, and C6. C2 now has opt-in coverage from
 both a deterministic local generator and a tiny real-SGLang tree EI smoke. C5
-has local optimizer-step evidence for one tactic-level tree sample, but remains
-live/config gated for the real Slime/Megatron trainer objective, compact tree
-fanout, and weight-sync/reload loop.
+has local optimizer-step evidence for one tactic-level tree sample plus
+trainer-data boundary coverage through Slime `RolloutManager` and Megatron
+`DataIterator`, but remains live/config gated for the real Slime/Megatron model
+step, compact tree fanout under `loss_type=sft_loss`, and weight-sync/reload
+loop.

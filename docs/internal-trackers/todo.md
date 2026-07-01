@@ -554,11 +554,13 @@ Remaining core work is intentionally not hidden as "todo code":
   settled and tested against the pinned Slime `Sample` contract, and tree
   samples feed a tiny local optimizer step. Tree/tactic rows now use Slime's
   compact fanout shape with shared per-search `Sample.rollout_id`, and
-  `tests/test_slime_compat.py` exercises the pinned `build_dp_schedule(...)`
-  path to prove multiple theorem searches are counted as multiple rollouts.
-  Still prove the emitted compact fanout samples are accepted by a real
-  Slime/Megatron trainer step with `loss_type=sft_loss` and by the weight-sync
-  loop before claiming tree-mode training support complete.
+  `tests/test_slime_compat.py` exercises the pinned
+  `RolloutManager` conversion/split path, `build_dp_schedule(...)`,
+  `process_rollout_data(...)`, and Megatron `DataIterator` to prove multiple
+  theorem searches are counted as multiple rollouts at the trainer-data
+  boundary. Still prove the emitted compact fanout samples are accepted by a
+  real Slime/Megatron model step with `loss_type=sft_loss` and by the
+  weight-sync loop before claiming tree-mode training support complete.
 - **Dataset-specific adapters:** add concrete `BenchmarkRowAdapter`s only after
   selecting public datasets whose native rows are not already LeanFoundry
   theorem JSONL.

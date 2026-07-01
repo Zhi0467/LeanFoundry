@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import sys
+import types
 from argparse import Namespace
+from typing import Any
 
 import pytest
 
@@ -120,15 +123,120 @@ def test_tree_tactic_fanout_rollout_ids_schedule_as_two_rollouts():
 
     from slime.utils.dp_schedule import build_dp_schedule
 
+    output = _tree_tactic_output()
+    samples = _flatten(output)
+
+    assert [sample.rollout_id for sample in samples] == [0, 0, 2]
+    partitions, _micro_batches, _num_microbatches, global_batch_sizes = (
+        build_dp_schedule(
+            Namespace(
+                use_dynamic_batch_size=False,
+                micro_batch_size=1,
+                balance_data=False,
+                balance_by_flops=False,
+            ),
+            {
+                "dp_size": 1,
+                "cp_size": 1,
+                "vpp_size": 1,
+                "microbatch_group_size_per_vp_stage": 1,
+            },
+            [len(sample.tokens) for sample in samples],
+            global_batch_size=2,
+            rollout_indices=[sample.rollout_id for sample in samples],
+        )
+    )
+
+    assert partitions == [[0, 1, 2]]
+    assert global_batch_sizes == [2]
+
+
+def test_tree_tactic_fanout_reaches_train_rollout_data(monkeypatch):
+    """Exercise Slime's train-data split, not only its public scheduler."""
+
+    pytest.importorskip("megatron")
+    _stub_sglang_constants(monkeypatch)
+
+    from slime.backends.megatron_utils import data as train_data_module
+    from slime.ray import rollout as rollout_module
+    from slime.ray.rollout import RolloutManager
+    from slime.utils import data as slime_data_module
+
+    samples = _flatten(_tree_tactic_output())
+    args = _rollout_manager_args()
+    rollout_manager_class = RolloutManager.__ray_actor_class__
+    manager = rollout_manager_class.__new__(rollout_manager_class)
+    manager.args = args
+    manager.custom_convert_samples_to_train_data_func = None
+    manager.custom_reward_post_process_func = None
+    manager.train_parallel_config = {
+        "dp_size": 1,
+        "cp_size": 1,
+        "vpp_size": 1,
+        "microbatch_group_size_per_vp_stage": 1,
+    }
+    monkeypatch.setattr(
+        rollout_module.ray,
+        "put",
+        lambda value, **_kwargs: value,
+    )
+    monkeypatch.setattr(
+        slime_data_module.ray,
+        "get",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        train_data_module.mpu,
+        "get_virtual_pipeline_model_parallel_world_size",
+        lambda: None,
+    )
+
+    train_data = manager._convert_samples_to_train_data(samples)
+    rollout_data_refs = manager._split_train_data_by_dp(train_data)
+    rollout_data = slime_data_module.process_rollout_data(
+        args,
+        rollout_data_refs,
+        dp_rank=0,
+        dp_size=1,
+    )
+
+    assert rollout_data["rollout_ids"] == [0, 0, 2]
+    assert rollout_data["sample_indices"] == [0, 1, 2]
+    assert rollout_data["global_batch_sizes"] == [2]
+    assert rollout_data["num_microbatches"] == [3]
+    assert rollout_data["micro_batch_indices"] == [[0], [1], [2]]
+    assert rollout_data["total_lengths"] == [
+        len(sample.tokens) for sample in samples
+    ]
+    assert rollout_data["rollout_mask_sums"].tolist() == [11.0, 11.0, 5.0]
+    assert rollout_data["loss_masks"][0].tolist() == [1, 1, 1, 1]
+
+    (iterator,) = train_data_module.get_data_iterator(rollout_data)
+    first_batch = iterator.get_next(
+        [
+            "tokens",
+            "loss_masks",
+            "rollout_ids",
+            "rollout_mask_sums",
+        ]
+    )
+    assert first_batch["rollout_ids"] == [0]
+    assert first_batch["rollout_mask_sums"][0].item() == 11.0
+    assert first_batch["loss_masks"][0].tolist() == [1, 1, 1, 1]
+
+
+def _tree_tactic_output() -> list[Any]:
     from leanfoundry.proofsearch.to_rows import TrainingRow
     from leanfoundry.proofsearch.to_rows import TrainingSegment
+
+    sys.modules.pop("leanfoundry.slime.samples", None)
     from leanfoundry.slime.samples import to_samples
 
     class Tokenizer:
         def encode(self, text, add_special_tokens=False):
             return [ord(char) for char in text]
 
-    output = to_samples(
+    return to_samples(
         [
             TrainingRow(
                 kind="tactic",
@@ -161,31 +269,56 @@ def test_tree_tactic_fanout_rollout_ids_schedule_as_two_rollouts():
         rollout_id=11,
         tokenizer=Tokenizer(),
     )
-    samples = _flatten(output)
 
-    assert [sample.rollout_id for sample in samples] == [0, 0, 2]
-    partitions, _micro_batches, _num_microbatches, global_batch_sizes = (
-        build_dp_schedule(
-            Namespace(
-                use_dynamic_batch_size=False,
-                micro_batch_size=1,
-                balance_data=False,
-                balance_by_flops=False,
-            ),
-            {
-                "dp_size": 1,
-                "cp_size": 1,
-                "vpp_size": 1,
-                "microbatch_group_size_per_vp_stage": 1,
-            },
-            [len(sample.tokens) for sample in samples],
-            global_batch_size=2,
-            rollout_indices=[sample.rollout_id for sample in samples],
-        )
+
+def _rollout_manager_args() -> Namespace:
+    return Namespace(
+        advantage_estimator="grpo",
+        rewards_normalization=False,
+        use_dynamic_batch_size=False,
+        micro_batch_size=1,
+        balance_data=False,
+        balance_by_flops=False,
+        global_batch_size=2,
+        rollout_data_transport="object-store",
+        reward_key=None,
     )
 
-    assert partitions == [[0, 1, 2]]
-    assert global_batch_sizes == [2]
+
+def _stub_sglang_constants(monkeypatch) -> None:
+    # Slime imports SGLang launch types at module import time. This test only
+    # exercises RolloutManager's train-data conversion/split methods; real
+    # SGLang serving is covered by tests/test_slime_tree_ei_live.py.
+    sglang_module = types.ModuleType("sglang")
+    srt_module = types.ModuleType("sglang.srt")
+    srt_module.__path__ = []
+    constants_module = types.ModuleType("sglang.srt.constants")
+    server_args_module = types.ModuleType("sglang.srt.server_args")
+    utils_module = types.ModuleType("sglang.srt.utils")
+
+    class ServerArgs:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+        def url(self):
+            host = getattr(self, "host", "127.0.0.1")
+            port = getattr(self, "port", 30000)
+            return f"http://{host}:{port}"
+
+    constants_module.GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
+    constants_module.GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
+    constants_module.GPU_MEMORY_TYPE_WEIGHTS = "weights"
+    server_args_module.ServerArgs = ServerArgs
+    utils_module.kill_process_tree = lambda _pid: None
+    monkeypatch.setitem(sys.modules, "sglang", sglang_module)
+    monkeypatch.setitem(sys.modules, "sglang.srt", srt_module)
+    monkeypatch.setitem(sys.modules, "sglang.srt.constants", constants_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "sglang.srt.server_args",
+        server_args_module,
+    )
+    monkeypatch.setitem(sys.modules, "sglang.srt.utils", utils_module)
 
 
 def _flatten(node):

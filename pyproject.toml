@@ -34,10 +34,13 @@ leanfoundry-validate-backend = "leanfoundry.env_backend.validation_cli:main"
 # Training-cluster only (Linux + CUDA). Installed explicitly with
 # `uv sync --extra training`; not part of the default install. Slime is pinned
 # to an explicit commit in [tool.uv.sources]; bump it deliberately and re-run
-# the `slime` compat tests, never track main. See the Slime adapter notes in
-# docs/internal-trackers/todo.md.
+# the `slime` compat tests, never track main. Megatron deps here cover local
+# train-data compatibility tests; real SGLang stays in an isolated runtime/env.
+# See the Slime adapter notes in docs/internal-trackers/todo.md.
 training = [
+    "megatron-core==0.18.0; python_version >= '3.12' and sys_platform == 'linux'",
     "slime",
+    "torch-memory-saver==0.0.9.post1; python_version >= '3.12' and sys_platform == 'linux'",
 ]
 
 [dependency-groups]

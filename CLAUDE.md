@@ -41,7 +41,9 @@ rows use Slime compact fanout nesting (`list[list[list[Sample]]]`) with shared
 per-search `Sample.rollout_id`; the default downstream tree objective is
 EI/SFT (`loss_type=sft_loss`), not fixed-width GRPO. The tiny real-SGLang tree
 EI smoke proves this local sample contract plus one local optimizer step, not
-full Slime/Megatron trainer acceptance or weight sync.
+full Slime/Megatron trainer acceptance or weight sync. The compat suite reaches
+Slime `RolloutManager` plus Megatron `DataIterator`; real SGLang remains in the
+isolated `.venv-sglang` unless a full trainer image is being built.
 Downstream Slime launches should pass
 `leanfoundry.slime.add_leanfoundry_arguments` to Slime's parser hook instead of
 duplicating LeanFoundry-owned args.

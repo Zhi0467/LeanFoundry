@@ -1,6 +1,24 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.85 (2026-07-01):** The tree compact-fanout handoff now reaches Slime's
+> trainer-side data boundary in the local compatibility suite. The `[training]`
+> extra includes `megatron-core==0.18.0` and `torch-memory-saver==0.0.9.post1`
+> on Linux/Python >= 3.12, and `tests/test_slime_compat.py` drives
+> LeanFoundry tactic samples through the pinned Slime
+> `RolloutManager._convert_samples_to_train_data(...)`,
+> `_split_train_data_by_dp(...)`, `process_rollout_data(...)`, and Megatron
+> `DataIterator`. The asserted train data keeps rollout ids `[0, 0, 2]`,
+> per-rollout mask sums `[11, 11, 5]`, one global batch of two theorem-search
+> rollouts, and three microbatches. This proves the local trainer input shape
+> up to the model actor iterator. It is still not a full Slime/Megatron model
+> step: importing the pinned installed Slime actor reaches missing trainer-stack
+> dependencies/packaging (`sglang` is intentionally isolated in `.venv-sglang`,
+> and the installed Slime wheel omits the source `megatron_utils/kernels`
+> package). The remaining completion proof is a trainer-image run that uses the
+> full Slime/SGLang/Megatron stack and executes `loss_type=sft_loss` plus weight
+> sync.
+
 > **v11.84 (2026-07-01):** Tree-search Slime samples now use Slime's compact
 > fanout contract, not a flat ragged `list[list[Sample]]`. `tactic` rows from
 > one theorem search are returned as `list[list[list[Sample]]]` at the Slime

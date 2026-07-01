@@ -71,7 +71,10 @@ consumer that plugs in via stable interfaces.
   per-search `Sample.rollout_id`; the default downstream objective is
   EI/SFT (`loss_type=sft_loss`), not fixed-width GRPO. The tiny real-SGLang
   tree EI smoke proves this local sample contract plus one local optimizer
-  step, not full Slime/Megatron trainer acceptance or weight sync.
+  step, and the compat suite reaches Slime `RolloutManager` plus Megatron
+  `DataIterator`, not full Slime/Megatron trainer acceptance or weight sync.
+  The `[training]` extra includes Megatron train-data deps; real SGLang stays in
+  isolated `.venv-sglang` unless a full trainer image is being built.
   Downstream Slime launches should use
   `leanfoundry.slime.add_leanfoundry_arguments` for LeanFoundry-owned args
   instead of duplicating the adapter flag list.
