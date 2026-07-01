@@ -36,9 +36,12 @@ owns Slime Sample token/loss-mask construction, env-profile validation,
 self-correct trace rows, value-client modes, and negation-backed DISPROVED
 semantics. Use Slime `append_response_tokens(...)` when rows carry rollout
 log-probs; verifier-grounded LeanFoundry rows without SGLang log-probs use the
-explicit `leanfoundry_verified_without_rollout_logprobs` construction path. The
-tiny real-SGLang tree EI smoke proves this local sample contract plus one local
-optimizer step, not full Slime/Megatron trainer acceptance or weight sync.
+explicit `leanfoundry_verified_without_rollout_logprobs` construction path. Tree
+rows use Slime compact fanout nesting (`list[list[list[Sample]]]`) with shared
+per-search `Sample.rollout_id`; the default downstream tree objective is
+EI/SFT (`loss_type=sft_loss`), not fixed-width GRPO. The tiny real-SGLang tree
+EI smoke proves this local sample contract plus one local optimizer step, not
+full Slime/Megatron trainer acceptance or weight sync.
 Downstream Slime launches should pass
 `leanfoundry.slime.add_leanfoundry_arguments` to Slime's parser hook instead of
 duplicating LeanFoundry-owned args.

@@ -177,9 +177,11 @@ engine, so the adapter ships **in this repo** as `leanfoundry/slime/` under the
 `Checkpoint`) was the wrong model and has been deleted.
 - Integration is PULL, not push. Slime loads a function via
   `--rollout-function-path leanfoundry.slime.generate_rollout` and calls
-  `generate_rollout(args, rollout_id, data_buffer, evaluation) -> list[list[Sample]]`.
+  `generate_rollout(args, rollout_id, data_buffer, evaluation)` to return a
+  `RolloutFnTrainOutput`.
   The loop is online on-policy batched: per `rollout_id`, generate with current
-  weights, train (GRPO/PPO via Megatron), sync weights to SGLang.
+  weights, train (SFT/GRPO/PPO via Megatron depending on `loss_type`), sync
+  weights to SGLang.
 - `generate_rollout` is the **composition root**: it builds `SGLangPolicyClient`
   and injects it into `run_search_batch`, so the "engine never builds clients"
   rule still holds. It is a module-level callable (Slime imports it by path) over
@@ -198,7 +200,8 @@ engine, so the adapter ships **in this repo** as `leanfoundry/slime/` under the
   the two Slime-facing edges branch by mode — two training targets, see the
   training-data model below. Policy call: direct uses `sample_proofs`, tree uses
   `sample_tactics`. `to_samples`: tree -> Markovian per-node `(state, tactic)`
-  step `Sample`s, one per proved node, sharing one `rollout_id` (lineage-A
+  step `Sample`s, one per proved node, returned with Slime compact fanout
+  nesting and sharing one per-search `Sample.rollout_id` (lineage-A
   search-distilled step data; one node = one Sample is correct, NOT a
   trajectory); direct -> one whole-proof `Sample` per candidate
   (`prompt=statement`, `response=proof`, `reward=verify`), ~1:1 with Slime's
@@ -549,10 +552,13 @@ Remaining core work is intentionally not hidden as "todo code":
   checkpoint before claiming deployment readiness.
 - **Core Slime correctness:** adapter-level token/loss-mask construction is
   settled and tested against the pinned Slime `Sample` contract, and tree
-  samples feed a tiny local optimizer step. Still prove the emitted samples are
-  accepted by the real Slime/Megatron trainer objective and weight-sync loop.
-- **Tree rollout grouping:** prove ragged tree-mode groups in a real Slime
-  training/rollout path before claiming tree-mode training support complete.
+  samples feed a tiny local optimizer step. Tree/tactic rows now use Slime's
+  compact fanout shape with shared per-search `Sample.rollout_id`, and
+  `tests/test_slime_compat.py` exercises the pinned `build_dp_schedule(...)`
+  path to prove multiple theorem searches are counted as multiple rollouts.
+  Still prove the emitted compact fanout samples are accepted by a real
+  Slime/Megatron trainer step with `loss_type=sft_loss` and by the weight-sync
+  loop before claiming tree-mode training support complete.
 - **Dataset-specific adapters:** add concrete `BenchmarkRowAdapter`s only after
   selecting public datasets whose native rows are not already LeanFoundry
   theorem JSONL.

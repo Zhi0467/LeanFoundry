@@ -3,6 +3,48 @@
 This file records completed implementation slices and review follow-ups. Keep
 future-facing plans in [`todo.md`](todo.md).
 
+## 2026-07-01: Slime Tree Compact Fanout Rollout IDs
+
+Fixed the Slime tree-row grouping path before the downstream trainer handoff.
+The adapter now distinguishes the Slime rollout step id from the trainer
+rollout id: `metadata["slime_rollout_id"]` keeps the Slime step id, while
+`Sample.rollout_id` is assigned per theorem-search rollout for tree/tactic
+rows. Tree rows return Slime's compact fanout shape
+`list[list[list[Sample]]]`, so multiple step samples from one theorem search
+are validated as sibling samples from one rollout and are loss-normalized
+together.
+
+- `leanfoundry/slime/samples.py` assigns global sample indices across the
+  returned batch, wraps tactic groups as compact fanout, and leaves
+  direct/self-correct rows in the regular Slime group shape with one rollout id
+  per sample by default.
+- `SlimeRolloutRunner.to_samples(...)` now exposes the mixed regular/compact
+  output type instead of pretending all modes are `list[list[Sample]]`.
+- Added a pinned-Slime compatibility test around
+  `slime.utils.dp_schedule.build_dp_schedule(...)`: two theorem searches with
+  three emitted tactic samples schedule as two rollouts (`[0, 0, 2]`), so the
+  trainer step is not collapsed into one Slime rollout id.
+- Updated the live tree EI assertion to require compact fanout nesting and to
+  check both trainer rollout id and Slime step id metadata.
+- This addresses the local scheduler/data-shape bug. Remaining live proof:
+  run a real Slime/Megatron trainer step with tree compact fanout and
+  `loss_type=sft_loss`; the local optimizer-step smoke is not full trainer
+  acceptance.
+
+Validation:
+
+- `uv run --no-dev --with pytest pytest -q` -> 221 passed, 11 skipped.
+- `uv run --extra training pytest -q -m slime` -> 5 passed, 4 skipped,
+  223 deselected.
+- `uv run --no-dev --with flake8 flake8 leanfoundry tests` passed.
+- `uv lock --check && git diff --check` passed.
+- Live deterministic Slime/Lean smoke with Docker Kimina on
+  `http://127.0.0.1:8017` passed all modes:
+  `tests/test_slime_live.py` -> 3 passed.
+- Live real-SGLang tree EI smoke with compact fanout assertions and one local
+  optimizer step passed:
+  `tests/test_slime_tree_ei_live.py` -> 1 passed.
+
 ## 2026-07-01: Lean Timeout Defaults For Mathlib Cold Boot
 
 Raised the adapter's default Lean timeouts after tracing the Kimina backend.
@@ -756,8 +798,9 @@ never a data gate.
   before A-type insertion). Updated metrics to `step_her_multiplier` and
   render-candidate/verified multipliers.
 - Tightened the Slime grouping contract: direct/self-correct groups stay fixed
-  for GRPO-style objectives, while tree-step mode returns one ragged group per
-  theorem search and sets shared `Sample.rollout_id` on sibling step samples.
+  for GRPO-style objectives, while tree-step mode keeps one rollout identity per
+  theorem search. The concrete Slime return shape was later refined to compact
+  fanout; see "Slime Tree Compact Fanout Rollout IDs" above.
 
 Validation:
 
@@ -775,8 +818,8 @@ requirements rather than leaving them as open chat context.
   trainer consumes.
 - Grounded the tree objective in the step-prover literature: tree search emits
   lineage-A `(proof_state, tactic)` rows for EI/SFT by default; whole-proof and
-  self-correction are separate lineage-B targets. Ragged tree groups must not be
-  forced through fixed-size GRPO unless the trainer explicitly supports them.
+  self-correction are separate lineage-B targets. Tree fanout must not be forced
+  through fixed-size GRPO unless the trainer explicitly supports it.
 - Added full-implementation requirements for self-correction trace artifacts,
   bonded and unbonded value clients, numeric-head and natural-language boxed/JSON
   value parsing, negation-backed `DISPROVED` labels, and fail-fast env-profile

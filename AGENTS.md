@@ -66,9 +66,12 @@ consumer that plugs in via stable interfaces.
   scalar), and negation-backed DISPROVED semantics. Slime
   `append_response_tokens(...)` is used when rows carry rollout log-probs;
   verifier-grounded LeanFoundry rows without SGLang log-probs use the explicit
-  `leanfoundry_verified_without_rollout_logprobs` construction path. The tiny
-  real-SGLang tree EI smoke proves this local sample contract plus one local
-  optimizer step, not full Slime/Megatron trainer acceptance or weight sync.
+  `leanfoundry_verified_without_rollout_logprobs` construction path. Tree rows
+  use Slime compact fanout nesting (`list[list[list[Sample]]]`) with shared
+  per-search `Sample.rollout_id`; the default downstream objective is
+  EI/SFT (`loss_type=sft_loss`), not fixed-width GRPO. The tiny real-SGLang
+  tree EI smoke proves this local sample contract plus one local optimizer
+  step, not full Slime/Megatron trainer acceptance or weight sync.
   Downstream Slime launches should use
   `leanfoundry.slime.add_leanfoundry_arguments` for LeanFoundry-owned args
   instead of duplicating the adapter flag list.

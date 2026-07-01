@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypeAlias
 
 from slime.utils.types import Sample
 
 from leanfoundry.proofsearch.to_rows import TrainingRow, TrainingSegment
+
+SlimeSampleOutput: TypeAlias = list[list[Sample] | list[list[Sample]]]
 
 _SLIME_RESPONSE_LOG_PROBS_KEY = "slime_response_log_probs"
 _SLIME_RESPONSE_META_INFO_KEY = "slime_response_meta_info"
@@ -29,7 +31,7 @@ def to_samples(
     rollout_id: int,
     tokenizer: Any,
     args: Any = None,
-) -> list[list[Sample]]:
+) -> SlimeSampleOutput:
     """Convert training rows to Slime sample groups."""
 
     groups: OrderedDict[str, list[Sample]] = OrderedDict()
@@ -42,11 +44,31 @@ def to_samples(
                 args=args,
             )
         )
+    output: SlimeSampleOutput = []
+    sample_index = 0
     for group_index, group in enumerate(groups.values()):
+        group_rollout_id = sample_index
         for index, sample in enumerate(group):
             sample.group_index = group_index
-            sample.index = index
-    return list(groups.values())
+            sample.index = sample_index
+            sample_index += 1
+        if _is_compact_rollout_group(group):
+            for sample in group:
+                _set_rollout_identity(
+                    sample,
+                    rollout_id=group_rollout_id,
+                    slime_rollout_id=rollout_id,
+                )
+            output.append([group])
+        else:
+            for sample in group:
+                _set_rollout_identity(
+                    sample,
+                    rollout_id=sample.index,
+                    slime_rollout_id=rollout_id,
+                )
+            output.append(group)
+    return output
 
 
 def sample_from_row(
@@ -79,6 +101,7 @@ def sample_from_row(
         metadata={
             **_public_metadata(row.meta),
             "rollout_id": rollout_id,
+            "slime_rollout_id": rollout_id,
             "group_key": row.group_key,
             "lf_kind": row.kind,
             "lf_trainable_token_source": token_source,
@@ -104,6 +127,21 @@ def sample_from_row(
         )
     _validate_sample(sample, prompt_token_count=len(prompt_ids))
     return sample
+
+
+def _is_compact_rollout_group(group: list[Sample]) -> bool:
+    return any(sample.metadata.get("lf_kind") == "tactic" for sample in group)
+
+
+def _set_rollout_identity(
+    sample: Sample,
+    *,
+    rollout_id: int | None,
+    slime_rollout_id: int,
+) -> None:
+    sample.rollout_id = rollout_id
+    sample.metadata["rollout_id"] = rollout_id
+    sample.metadata["slime_rollout_id"] = slime_rollout_id
 
 
 def _append_verified_segments(

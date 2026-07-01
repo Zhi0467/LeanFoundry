@@ -181,9 +181,9 @@ def test_to_samples_sets_tokens_loss_mask_and_groups(
             ),
         ),
         TrainingRow(
-            kind="tactic",
-            prompt="S:",
-            response="simp",
+            kind="self_correct",
+            prompt="P2:",
+            response="done",
             reward=1.0,
             group_key="theorem-1",
             meta={"env_profile": "mathlib"},
@@ -198,18 +198,72 @@ def test_to_samples_sets_tokens_loss_mask_and_groups(
 
     assert len(groups) == 1
     assert [sample.index for sample in groups[0]] == [0, 1]
+    assert [sample.rollout_id for sample in groups[0]] == [0, 1]
     first = groups[0][0]
     assert first.status == FakeSample.Status.COMPLETED
     assert first.tokens == [ord(char) for char in "P:bad\nfeedback\ngood"]
     assert first.response_length == len("bad\nfeedback\ngood")
     assert first.loss_mask == [1, 1, 1] + [0] * 10 + [1, 1, 1, 1]
     assert first.metadata["lf_kind"] == "self_correct"
-    assert first.metadata["rollout_id"] == 9
+    assert first.metadata["rollout_id"] == 0
+    assert first.metadata["slime_rollout_id"] == 9
     assert (
         first.metadata["lf_trainable_token_source"]
         == "leanfoundry_verified_without_rollout_logprobs"
     )
     assert first.rollout_log_probs is None
+
+
+def test_to_samples_wraps_tactic_rows_as_compact_rollouts(
+    fake_slime_modules,
+) -> None:
+    samples_module = importlib.import_module("leanfoundry.slime.samples")
+    rows = [
+        TrainingRow(
+            kind="tactic",
+            prompt="S1:",
+            response="simp",
+            reward=1.0,
+            group_key="theorem-1",
+            meta={"env_profile": "mathlib"},
+        ),
+        TrainingRow(
+            kind="tactic",
+            prompt="S2:",
+            response="trivial",
+            reward=1.0,
+            group_key="theorem-1",
+            meta={"env_profile": "mathlib"},
+        ),
+        TrainingRow(
+            kind="tactic",
+            prompt="S3:",
+            response="aesop",
+            reward=1.0,
+            group_key="theorem-2",
+            meta={"env_profile": "mathlib"},
+        ),
+    ]
+
+    output = samples_module.to_samples(
+        rows,
+        rollout_id=9,
+        tokenizer=FakeTokenizer(),
+    )
+
+    assert len(output) == 2
+    first_group = output[0][0]
+    second_group = output[1][0]
+    assert [sample.response for sample in first_group] == ["simp", "trivial"]
+    assert [sample.index for sample in first_group] == [0, 1]
+    assert [sample.rollout_id for sample in first_group] == [0, 0]
+    assert [sample.metadata["rollout_id"] for sample in first_group] == [0, 0]
+    assert [sample.metadata["slime_rollout_id"] for sample in first_group] == [
+        9,
+        9,
+    ]
+    assert [sample.index for sample in second_group] == [2]
+    assert [sample.rollout_id for sample in second_group] == [2]
 
 
 def test_to_samples_uses_slime_append_when_log_probs_exist(
@@ -659,8 +713,10 @@ def test_async_generate_rollout_runs_search_and_returns_samples(
         "lf_status_proved": 1,
     }
     assert len(output.samples) == 1
-    assert output.samples[0][0].response == "trivial"
-    assert output.samples[0][0].metadata["lf_kind"] == "tactic"
+    tree_samples = output.samples[0][0]
+    assert tree_samples[0].response == "trivial"
+    assert tree_samples[0].metadata["lf_kind"] == "tactic"
+    assert tree_samples[0].rollout_id == 0
 
     eval_output = asyncio.run(
         rollout_module.async_generate_rollout(

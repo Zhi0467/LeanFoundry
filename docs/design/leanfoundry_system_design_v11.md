@@ -1,6 +1,21 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.84 (2026-07-01):** Tree-search Slime samples now use Slime's compact
+> fanout contract, not a flat ragged `list[list[Sample]]`. `tactic` rows from
+> one theorem search are returned as `list[list[list[Sample]]]` at the Slime
+> boundary (`prompt/search x compact-rollout x step-samples`); siblings share
+> one `Sample.rollout_id`, while `metadata["slime_rollout_id"]` preserves the
+> Slime rollout step id. Direct and self-correct rows remain regular Slime
+> sample groups and get one rollout id per sample unless a downstream custom
+> objective deliberately regroups them. A new compatibility test exercises the
+> pinned Slime `build_dp_schedule(...)` path and proves two theorem searches
+> schedule as two rollouts instead of being collapsed into one Slime step.
+> This clarifies the objective boundary: tree lineage-A `(proof_state,
+> tactic)` data is expert-iteration/SFT data (`loss_type=sft_loss` for the
+> default downstream launch), not fixed-width GRPO. A full Slime/Megatron
+> trainer step with this compact fanout is still the remaining live proof.
+
 > **v11.83 (2026-07-01):** The Slime handoff now includes an argparse provider:
 > `leanfoundry.slime.add_leanfoundry_arguments(parser)`. The downstream training
 > repo should pass this function to Slime's
@@ -30,7 +45,7 @@
 > loading from a temporary HF checkpoint, and live Lean execution, but the model
 > endpoint is deterministic test infrastructure rather than a deployed SGLang
 > model server. Remaining before trainer-complete claims: run against the real
-> SGLang/Megatron deployment, prove ragged tree groups are accepted by the
+> SGLang/Megatron deployment, prove tree compact fanout is accepted by the
 > trainer objective, and run a full Slime/Megatron training run.
 
 > **v11.80 (2026-07-01):** The Slime `Sample` construction boundary is now
@@ -44,7 +59,7 @@
 > `loss_mask`. The opt-in live Slime smoke now covers `direct`, `puct_tree`,
 > and `self_correct` modes and requires at least one emitted row. This is
 > adapter/API evidence, not a trainer-complete claim: real Slime/SGLang trainer
-> acceptance, ragged tree groups, and a full training run remain unproven until
+> acceptance, tree compact fanout, and a full training run remain unproven until
 > the live stack exists and passes.
 
 > **v11.79 (2026-07-01):** Local `/exec` e2e was recovered after starting the
@@ -2910,10 +2925,13 @@ one `Sample` would recreate the forbidden flattening problem. Mapping one full
 theorem search to one `Sample` is possible for a prototype, but it makes env
 batching across proof graphs and trajectory extraction awkward.
 
-That function returns `list[list[Sample]]` groups to Slime. LeanFoundry's role
-inside it is algorithm-neutral search and optional durable side-write to the
-SQLite `ReplayStore`; Slime owns the online data buffer and trainer. The full
-rollout function ships here (`leanfoundry/slime/rollout.py`) as the default
+That function returns Slime training output from `runner.to_samples(...)`:
+direct/self-correct rows use regular Slime sample groups, while tree/tactic
+rows use Slime's compact fanout nesting with shared per-search
+`Sample.rollout_id` (see v11.84). LeanFoundry's role inside it is
+algorithm-neutral search and optional durable side-write to the SQLite
+`ReplayStore`; Slime owns the online data buffer and trainer. The full rollout
+function ships here (`leanfoundry/slime/rollout.py`) as the default
 `generate_rollout`; the training repo just points
 `--rollout-function-path leanfoundry.slime.generate_rollout` at it and supplies
 config/overrides. Default body (simplified from the in-repo implementation;
@@ -2970,11 +2988,13 @@ async def async_generate_rollout(args, rollout_id, data_source, evaluation=False
 
 For tree mode, `Sample` represents one Markovian row per proved node:
 `prompt=state`, `response=tactic`. Sibling step samples produced by the same
-search share the same Slime `rollout_id`, so downstream loss aggregation can
+search share the same trainer `Sample.rollout_id`; the Slime rollout step id is
+kept separately as metadata for debugging. Downstream loss aggregation can then
 avoid over-counting one proof search just because it produced many local rows.
-There is no history-conditional or injected-state trajectory sample. Grouping,
-reward shaping, and EI-vs-GRPO treatment are adapter/training-side decisions;
-core extraction keeps emitting algorithm-neutral `TrainingArtifacts`.
+There is no history-conditional or injected-state trajectory sample. The
+default downstream tree objective is EI/SFT; GRPO requires a custom objective
+that explicitly supports this compact fanout. Core extraction keeps emitting
+algorithm-neutral `TrainingArtifacts`.
 
 ---
 

@@ -178,8 +178,8 @@ def generate_rollout(
 # In Slime's default wrapper, prompts come from
 # `data_source.get_samples(args.over_sampling_batch_size)`, and each group has
 # exactly `args.n_samples_per_prompt` generated candidates. We replace the whole
-# rollout function, so tree mode may return ragged groups; see §7.
-# Training return: RolloutFnTrainOutput(samples=<list[list[Sample]]>, metrics=<dict>)
+# rollout function, so tree mode may return compact fanout groups; see §7.
+# Training return: RolloutFnTrainOutput(samples=<regular-or-compact-sample-groups>, metrics=<dict>)
 
 # slime/utils/types.py
 @dataclass
@@ -223,9 +223,9 @@ class Sample:
   eval-path shape. Read `slime/rollout/base_types.py`.
 - C5. Which Slime loss/objective the training config uses for each mode. Direct
   GRPO-style objectives expect fixed candidate groups; tree-step EI/SFT returns
-  ragged groups with shared `Sample.rollout_id` (§7), so do not route it through
-  a fixed-per-prompt GRPO loss unless that loss explicitly supports ragged
-  groups.
+  compact fanout groups with shared `Sample.rollout_id` (§7), so do not route
+  it through a fixed-per-prompt GRPO loss unless that loss explicitly supports
+  compact tree fanout.
 
 > **2026-06-30:** C1, C3, C4, and C6 are now checked against the pinned Slime
 > commit and covered by fake adapter tests or `tests/test_slime_compat.py`:
@@ -260,6 +260,13 @@ class Sample:
 > `parse_args(add_custom_arguments=...)` hook. It registers LeanFoundry-owned
 > `lean_*` and `lf_*` flags; Slime remains responsible for native training,
 > checkpoint, rollout-batch, and SGLang-router arguments.
+>
+> **2026-07-01:** Tree/tactic rows now return Slime's compact fanout shape and
+> assign trainer rollout ids per theorem search. The pinned Slime
+> `build_dp_schedule(...)` path is covered by `tests/test_slime_compat.py`,
+> proving that two theorem searches with three emitted step samples schedule as
+> two rollouts. This is scheduler-contract evidence; a full Slime/Megatron
+> train step with `loss_type=sft_loss` is still the remaining live check.
 - C6. Tokenizer source and token/loss-mask semantics. The adapter is responsible
   for constructing the exact tokens the trainer consumes. It must use Slime's
   configured tokenizer/checkpoint (or verified SGLang token ids when returned),
@@ -392,10 +399,11 @@ Slime's `/generate` schema. Model-specific hooks pass through to the base.
 ### 4.d `to_samples()` (Phase 3, `slime/samples.py`)
 ```python
 from slime.utils.types import Sample
-def to_samples(rows: list[TrainingRow], *, rollout_id, tokenizer, args) -> list[list[Sample]]:
+SlimeSampleOutput = list[list[Sample] | list[list[Sample]]]
+
+def to_samples(rows: list[TrainingRow], *, rollout_id, tokenizer, args) -> SlimeSampleOutput:
     # 1. build a Sample per row:
-    #      s = Sample(prompt=row.prompt, label=..., rollout_id=rollout_id,
-    #                 metadata={**row.meta, "rollout_id": rollout_id})
+    #      s = Sample(prompt=row.prompt, label=..., metadata={...})
     #      s.reward = row.reward
     #      If row.meta carries slime_response_log_probs:
     #          append segments with Sample.append_response_tokens(...,
@@ -405,7 +413,11 @@ def to_samples(rows: list[TrainingRow], *, rollout_id, tokenizer, args) -> list[
     #          response_length, and loss_mask without pretending rollout
     #          log-probs exist.
     #      s.status = Sample.Status.COMPLETED
-    # 2. group into list[list[Sample]] honoring §7.
+    # 2. assign Sample.index / group_index and rollout identity:
+    #      tree/tactic rows from one theorem search share one Sample.rollout_id
+    #      and keep the Slime step id in metadata["slime_rollout_id"].
+    #      direct/self-correct rows get one rollout id per sample by default.
+    # 3. group into Slime's regular or compact-fanout shape honoring §7.
 ```
 
 Token construction is adapter-owned. For tactic rows, the whole tactic response
@@ -431,7 +443,7 @@ class SlimeRolloutRunner:
     def search_config(self, args) -> SearchConfig: ...           # map args -> SearchConfig fields
     # per-rollout:
     def theorems_from_source(self, prompts, args) -> list[TheoremSpec]: ...  # map input Samples -> TheoremSpec (see C1)
-    def to_samples(self, rows, rollout_id, args) -> list[list[Sample]]: ...
+    def to_samples(self, rows, rollout_id, args) -> SlimeSampleOutput: ...
     # model-specific hooks (override these; safe defaults provided):
     def tactic_prompt(self, state) -> str: ...
     def proof_prompt(self, theorem) -> str: ...
@@ -472,10 +484,12 @@ each prompt carries statement+env_profile+header+theorem_name (matches C1); (c)
 passes `leanfoundry.slime.add_leanfoundry_arguments` to Slime's parser hook and
 sets `--rollout-function-path leanfoundry.slime.generate_rollout`; (d) optionally
 subclasses `SlimeRolloutRunner` to override model-specific prompt/parse/reward
-hooks; (e) runs eval. No transport, no Sample plumbing, no search code. Slime
-still supplies native flags such as `--hf-checkpoint`, `--rollout-batch-size`,
-`--over-sampling-batch-size`, `--sglang-router-ip`, and
-`--sglang-router-port`.
+hooks; (e) runs eval. Tree EI launches should set Slime's `loss_type` to
+`sft_loss` unless the downstream repo supplies a custom objective for
+compact tree fanout. No transport, no Sample plumbing, no search code.
+Slime still supplies native flags such as `--hf-checkpoint`,
+`--rollout-batch-size`, `--over-sampling-batch-size`, `--sglang-router-ip`,
+and `--sglang-router-port`.
 
 ## 6. Reward derivation (explicit; default, overridable via `runner.reward`)
 
@@ -486,7 +500,8 @@ still supplies native flags such as `--hf-checkpoint`, `--rollout-batch-size`,
   you also need negatives/baseline: derive from `ValueLabel`s
   (`label`, `weight`, `disproved`) and from `SearchStatus.EXHAUSTED` attempts.
   Grouping/advantage is a training-side choice. The default tree path is
-  step-level EI/SFT on positive rows, not fixed-size GRPO.
+  step-level EI/SFT on positive rows (`loss_type=sft_loss` downstream), not
+  fixed-size GRPO.
 - **Self-correct:** reward the final accepted attempt; mask feedback turns.
   For turn-level SFT, only the correction attempt after feedback is trainable.
   For RL, the final accepted correction receives reward `1.0`; failed
@@ -520,31 +535,42 @@ The default Slime rollout implementation asserts
 adapter replaces that loop via
 `--rollout-function-path leanfoundry.slime.generate_rollout`, so the fixed-size
 assert is not a global Slime contract. The returned type is still
-`RolloutFnTrainOutput(samples=list[list[Sample]], metrics=dict)`.
+`RolloutFnTrainOutput(samples=..., metrics=dict)`, but tree rows use Slime's
+compact fanout nesting rather than pretending the flat default shape is
+fanout-safe.
 
 Use these group shapes:
 
 1. **Direct / self-correct:** one group per theorem prompt, fixed-size when using
    GRPO-style objectives. Each candidate proof/revision is one `Sample`; group
-   size should match `args.n_samples_per_prompt` when the trainer computes
-   per-prompt advantages.
-2. **Tree step mode:** one group per theorem search, variable-size. Each proved
-   node becomes one `Sample` with `prompt=state`, `response=tactic`, and all
-   samples from that search share the same `Sample.rollout_id`. The pinned Slime
-   `Sample` type explicitly supports this fan-out pattern: when one rollout
-   execution is split into multiple training samples, siblings should share
-   `rollout_id` so loss aggregation does not over-count the rollout.
-3. **Mixed mode:** concatenate direct fixed-size groups and tree ragged groups in
-   one `RolloutFnTrainOutput`, with `metadata["lf_kind"]` set to
+   size should match `args.n_samples_per_prompt` when a downstream objective
+   computes per-prompt advantages. LeanFoundry's default conversion assigns one
+   `Sample.rollout_id` per sample, matching Slime's normal fallback behavior;
+   `group_index` remains the prompt-level grouping key for custom reward
+   post-processing.
+2. **Tree step mode:** one compact fanout group per theorem search:
+   `list[list[list[Sample]]]` at the rollout return boundary. Each proved node
+   becomes one `Sample` with `prompt=state`, `response=tactic`, and all samples
+   from that theorem search share the same `Sample.rollout_id`.
+   `metadata["slime_rollout_id"]` keeps the Slime rollout step id for debugging;
+   `metadata["rollout_id"]` mirrors the trainer rollout id. The pinned Slime
+   `Sample` type and `RolloutManager` validation explicitly support this fanout
+   pattern: when one rollout execution is split into multiple training samples,
+   siblings should share `rollout_id` so loss aggregation does not over-count
+   the rollout. Slime's DP scheduler then counts theorem searches, not emitted
+   step rows, for `global_batch_size`.
+3. **Mixed mode:** concatenate direct fixed-size groups and tree compact fanout
+   groups in one `RolloutFnTrainOutput`, with `metadata["lf_kind"]` set to
    `"whole_proof"`, `"self_correct"`, or `"tactic"` so the trainer can route
    losses and reports by target.
 
 Do **not** pad tree groups to `n_samples_per_prompt`; padding changes loss
 weighting and hides the fact that a proof search naturally yields a variable
 number of step examples. Do **not** aggregate all step rows into one giant Sample;
-that destroys lineage-A supervision. If a Slime training objective refuses ragged
-groups, use direct/self-correct for that objective and keep tree mode on the
-step-level EI/SFT objective until the training repo adds ragged-group support.
+that destroys lineage-A supervision. If a Slime training objective refuses
+compact fanout groups, use direct/self-correct for that objective and keep tree
+mode on the step-level EI/SFT objective until the training repo adds support for
+this fanout contract.
 
 ## 8. Stale push adapter
 
@@ -590,9 +616,10 @@ Under `[training]` (marker `slime`, skipped by default):
 - Extend `tests/test_slime_compat.py` for any new Slime surface you depend on
   (`generate_rollout` signature, `RolloutFnTrainOutput`, `data_source`, the args
   in §3).
-- `to_samples`: rows → `list[list[Sample]]`; `loss_mask`/`reward`/`status` set;
-  response tokens and loss masks are aligned; self-correct masks feedback spans;
-  direct groups and tree ragged groups follow §7; all tree sibling samples share
+- `to_samples`: rows → regular Slime groups or compact fanout groups;
+  `loss_mask`/`reward`/`status` set; response tokens and loss masks are
+  aligned; self-correct masks feedback spans; direct groups and tree compact
+  fanout groups follow §7; all tree sibling samples share
   `Sample.rollout_id`.
 - An opt-in live smoke (`tests/test_slime_live.py`) against a stub
   `data_source`, a live SGLang-compatible router, a live Lean backend, and a HF
@@ -617,11 +644,11 @@ Log the slice in [`implementation-log.md`](../internal-trackers/implementation-l
 C1 `data_source` call form + input-Sample→theorem mapping · C2 `/generate`
 response schema · C3 `append_response_tokens` tokenization/tokenizer source ·
 C4 `RolloutFnTrainOutput`/`RolloutFnEvalOutput` fields + eval shape · C5 the
-loss/objective compatibility for direct fixed groups vs tree ragged groups (§7)
-· C6 tokenizer/token/loss-mask construction.
+loss/objective compatibility for direct fixed groups vs tree compact fanout
+groups (§7) · C6 tokenizer/token/loss-mask construction.
 
 Resolved in the baseline: C1, C3, C4, and C6. C2 now has opt-in coverage from
 both a deterministic local generator and a tiny real-SGLang tree EI smoke. C5
 has local optimizer-step evidence for one tactic-level tree sample, but remains
-live/config gated for the real Slime/Megatron trainer objective, ragged groups,
-and weight-sync/reload loop.
+live/config gated for the real Slime/Megatron trainer objective, compact tree
+fanout, and weight-sync/reload loop.

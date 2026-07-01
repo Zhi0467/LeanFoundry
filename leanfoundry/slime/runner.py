@@ -27,6 +27,7 @@ from leanfoundry.proofsearch import SearchAlgorithm, SearchConfig
 from leanfoundry.proofsearch.to_rows import TrainingRow
 from leanfoundry.schemas import FactorizedProofState, TheoremSpec
 from leanfoundry.slime.policy import SGLangPolicyClient
+from leanfoundry.slime.samples import SlimeSampleOutput
 from leanfoundry.slime.samples import to_samples as rows_to_samples
 
 
@@ -227,7 +228,7 @@ class SlimeRolloutRunner:
         rows: Iterable[TrainingRow],
         rollout_id: int,
         args: Any,
-    ) -> list[list[Any]]:
+    ) -> SlimeSampleOutput:
         """Convert rows into Slime Sample groups."""
 
         row_list = list(rows)

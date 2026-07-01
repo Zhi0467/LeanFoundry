@@ -100,10 +100,13 @@ def test_live_tree_search_ei_training_step(
     assert metrics["lf_rows_tactic"] > 0, metrics
     assert metrics.get("lf_status_error", 0) == 0, metrics
     assert isinstance(output.samples, list)
-    samples = [sample for group in output.samples for sample in group]
+    assert isinstance(output.samples[0][0], list)
+    samples = _flatten_samples(output.samples)
     assert samples, metrics
     first = samples[0]
     assert first.metadata["lf_kind"] == "tactic"
+    assert first.metadata["rollout_id"] == first.rollout_id
+    assert first.metadata["slime_rollout_id"] == 1
     assert first.response.strip() == "trivial"
     assert first.response_length > 0
     assert first.loss_mask == [1] * first.response_length
@@ -193,6 +196,15 @@ def _reset_rollout_globals(rollout_module: Any) -> None:
     rollout_module._POLICY = None
     rollout_module._VALUE = None
     rollout_module._VALUE_BUILT = False
+
+
+def _flatten_samples(node: Any) -> list[Any]:
+    if isinstance(node, list):
+        flattened: list[Any] = []
+        for item in node:
+            flattened.extend(_flatten_samples(item))
+        return flattened
+    return [node]
 
 
 def _run_optimizer_step(
