@@ -9,9 +9,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from leanfoundry.env_profiles import validate_theorem_env_profile
 from leanfoundry.replay.ids import stable_hash, stable_id
 from leanfoundry.schemas import (
     ATypeDataRecord,
+    AttemptLifecycleRecord,
+    ExtractionFailureRecord,
+    NegationAttemptRecord,
     PolicyExample,
     TheoremRecord,
     TrajectoryRecord,
@@ -36,7 +40,39 @@ THEOREM_VERIFIER_FIELDS_MIGRATION_PATH = (
     / "migrations"
     / "0003_theorem_verifier_fields.sql"
 )
-SCHEMA_VERSION = 3
+ATTEMPT_LIFECYCLE_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "schemas"
+    / "migrations"
+    / "0004_attempt_lifecycle_outbox.sql"
+)
+EXTRACTION_FAILURES_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "schemas"
+    / "migrations"
+    / "0005_extraction_failures.sql"
+)
+NEGATION_ATTEMPTS_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "schemas"
+    / "migrations"
+    / "0006_negation_attempts.sql"
+)
+FORMAL_STAGING_HEADER_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "schemas"
+    / "migrations"
+    / "0007_formal_staging_header.sql"
+)
+MIGRATIONS: tuple[tuple[int, Path], ...] = (
+    (2, POLICY_EXAMPLES_MIGRATION_PATH),
+    (3, THEOREM_VERIFIER_FIELDS_MIGRATION_PATH),
+    (4, ATTEMPT_LIFECYCLE_MIGRATION_PATH),
+    (5, EXTRACTION_FAILURES_MIGRATION_PATH),
+    (6, NEGATION_ATTEMPTS_MIGRATION_PATH),
+    (7, FORMAL_STAGING_HEADER_MIGRATION_PATH),
+)
+SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
 class SQLiteReplayStore:
@@ -77,6 +113,7 @@ class SQLiteReplayStore:
     async def put_theorem(self, theorem: TheoremRecord) -> None:
         """Insert or update one theorem statement."""
 
+        validate_theorem_env_profile(theorem)
         existing = await self.get_theorem(theorem.id)
         if existing is not None:
             _validate_theorem_identity(existing, theorem)
@@ -238,6 +275,101 @@ class SQLiteReplayStore:
         )
         self._commit_if_needed()
 
+    async def put_attempt_lifecycle_records(
+        self,
+        records: Sequence[AttemptLifecycleRecord],
+    ) -> None:
+        """Insert or update backend cleanup/cancel lifecycle records."""
+
+        rows = [_attempt_lifecycle_record_row(record) for record in records]
+        self._conn.executemany(
+            """
+            INSERT OR REPLACE INTO attempt_lifecycle_outbox (
+              id, theorem_id, env_profile, attempt_id, backend_item_id,
+              lifecycle_stage, lifecycle_status, retry_count, max_retries,
+              last_error, next_retry_at, terminal, created_at, updated_at
+            )
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              COALESCE(?, CURRENT_TIMESTAMP),
+              COALESCE(?, CURRENT_TIMESTAMP)
+            )
+            """,
+            rows,
+        )
+        self._commit_if_needed()
+
+    async def get_pending_attempt_lifecycle_records(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> list[AttemptLifecycleRecord]:
+        """Fetch non-terminal lifecycle records ready for reconciliation."""
+
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be positive")
+        query = """
+            SELECT
+              id, theorem_id, env_profile, attempt_id, backend_item_id,
+              lifecycle_stage, lifecycle_status, retry_count, max_retries,
+              last_error, next_retry_at, terminal, created_at, updated_at
+            FROM attempt_lifecycle_outbox
+            WHERE terminal = FALSE
+              AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP)
+            ORDER BY created_at, id
+        """
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            query = f"{query}\nLIMIT ?"
+            params = (limit,)
+        rows = self._conn.execute(query, params).fetchall()
+        return [_attempt_lifecycle_record_from_row(row) for row in rows]
+
+    async def put_extraction_failures(
+        self,
+        records: Sequence[ExtractionFailureRecord],
+    ) -> None:
+        """Insert extraction/rendering failure records."""
+
+        rows = [_extraction_failure_record_row(record) for record in records]
+        self._conn.executemany(
+            """
+            INSERT OR REPLACE INTO extraction_failures (
+              id, theorem_id, env_profile, attempt_id, failure_kind, message,
+              node_id, model_version, created_at
+            )
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP)
+            )
+            """,
+            rows,
+        )
+        self._commit_if_needed()
+
+    async def put_negation_attempts(
+        self,
+        records: Sequence[NegationAttemptRecord],
+    ) -> None:
+        """Insert synthetic-negation proof attempt records."""
+
+        rows = [_negation_attempt_record_row(record) for record in records]
+        self._conn.executemany(
+            """
+            INSERT OR REPLACE INTO negation_attempts (
+              id, theorem_id, env_profile, attempt_id, source_node_id,
+              negated_target, status, proved, proved_tactic,
+              tactic_calls_used, rendered_lean, payload_json, model_version,
+              created_at
+            )
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              COALESCE(?, CURRENT_TIMESTAMP)
+            )
+            """,
+            rows,
+        )
+        self._commit_if_needed()
+
     async def put_value_labels(self, labels: Sequence[ValueLabel]) -> None:
         """Insert value labels extracted from search."""
 
@@ -268,19 +400,22 @@ class SQLiteReplayStore:
             self._set_schema_version(SCHEMA_VERSION)
             self._conn.commit()
             return
-        if self._schema_version() < 2:
-            migration = POLICY_EXAMPLES_MIGRATION_PATH.read_text()
-            self._conn.executescript(migration)
-            self._set_schema_version(2)
+        for version, migration_path in MIGRATIONS:
+            if self._schema_version() < version:
+                self._apply_migration(version, migration_path)
+
+    def _apply_migration(self, version: int, migration_path: Path) -> None:
+        if version == 3 and self._has_theorem_verifier_columns():
+            self._set_schema_version(version)
             self._conn.commit()
-        if self._schema_version() < 3:
-            if not self._has_theorem_verifier_columns():
-                migration = (
-                    THEOREM_VERIFIER_FIELDS_MIGRATION_PATH.read_text()
-                )
-                self._conn.executescript(migration)
-            self._set_schema_version(3)
+            return
+        if version == 7 and self._has_formal_staging_header_column():
+            self._set_schema_version(version)
             self._conn.commit()
+            return
+        self._conn.executescript(migration_path.read_text())
+        self._set_schema_version(version)
+        self._conn.commit()
 
     def _schema_version(self) -> int:
         row = self._conn.execute("PRAGMA user_version").fetchone()
@@ -293,6 +428,13 @@ class SQLiteReplayStore:
         rows = self._conn.execute("PRAGMA table_info(theorems)").fetchall()
         columns = {row[1] for row in rows}
         return {"theorem_name", "allowed_axioms"}.issubset(columns)
+
+    def _has_formal_staging_header_column(self) -> bool:
+        rows = self._conn.execute(
+            "PRAGMA table_info(formal_statements_staging)"
+        ).fetchall()
+        columns = {row[1] for row in rows}
+        return "header" in columns
 
     def _commit_if_needed(self) -> None:
         if not self._in_transaction:
@@ -394,6 +536,72 @@ def _value_label_row(label: ValueLabel) -> tuple[object, ...]:
         label.depth,
         label.tactics_tried_on_subtree,
         label.model_version,
+    )
+
+
+def _attempt_lifecycle_record_row(
+    record: AttemptLifecycleRecord,
+) -> tuple[object, ...]:
+    return (
+        record.id,
+        record.theorem_id,
+        record.env_profile,
+        record.attempt_id,
+        record.backend_item_id,
+        record.lifecycle_stage,
+        record.lifecycle_status,
+        record.retry_count,
+        record.max_retries,
+        record.last_error,
+        record.next_retry_at,
+        record.terminal,
+        record.created_at,
+        record.updated_at,
+    )
+
+
+def _attempt_lifecycle_record_from_row(
+    row: sqlite3.Row,
+) -> AttemptLifecycleRecord:
+    data = dict(row)
+    data["terminal"] = bool(data["terminal"])
+    return AttemptLifecycleRecord(**data)
+
+
+def _extraction_failure_record_row(
+    record: ExtractionFailureRecord,
+) -> tuple[object, ...]:
+    return (
+        record.id,
+        record.theorem_id,
+        record.env_profile,
+        record.attempt_id,
+        record.failure_kind,
+        record.message,
+        record.node_id,
+        record.model_version,
+        record.created_at,
+    )
+
+
+def _negation_attempt_record_row(
+    record: NegationAttemptRecord,
+) -> tuple[object, ...]:
+    return (
+        record.id,
+        record.theorem_id,
+        record.env_profile,
+        record.attempt_id,
+        record.source_node_id,
+        record.negated_target,
+        record.status,
+        record.proved,
+        record.proved_tactic,
+        record.tactic_calls_used,
+        record.rendered_lean,
+        record.payload_json,
+        record.model_version,
+        record.created_at,
     )
 
 

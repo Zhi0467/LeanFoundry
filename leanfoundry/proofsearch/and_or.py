@@ -20,6 +20,9 @@ from leanfoundry.proofsearch._expansion import (
     expand_state,
 )
 from leanfoundry.proofsearch._lifecycle import cleanup_search_state
+from leanfoundry.proofsearch._negation import (
+    collect_new_negation_attempts,
+)
 from leanfoundry.proofsearch._extract import (
     UnsupportedProofExtraction,
     extract_proof_tree,
@@ -39,7 +42,12 @@ from leanfoundry.proofsearch.extraction import (
     extract_training_artifacts,
     extraction_context_for_theorem,
 )
-from leanfoundry.schemas import ExtractionFailure, TheoremSpec
+from leanfoundry.schemas import (
+    ExtractionFailure,
+    NegationAttempt,
+    TheoremSpec,
+    TrainingArtifacts,
+)
 
 
 class AndOrSearchEngine(SearchEngine):
@@ -87,6 +95,7 @@ class AndOrSearchEngine(SearchEngine):
         search_item_id = attempt_context.search_item_id
         tree: SearchTree | None = None
         cleanup_needed = False
+        negation_attempts: list[NegationAttempt] = []
 
         async def finish(result: SearchResult) -> SearchResult:
             cleanup_report = await cleanup_search_state(
@@ -122,20 +131,25 @@ class AndOrSearchEngine(SearchEngine):
                     policy_client=policy_client,
                     env_backend=env_backend,
                     config=config,
+                    theorem=theorem,
                     max_tactics_per_step_item=(
                         limits.max_tactics_per_step_item
                     ),
                 )
+                negation_attempts.extend(outcome.negation_attempts)
                 if outcome.operational_status is not None:
                     return await finish(
-                        operational_result(
-                            theorem,
-                            tree.tactic_calls_made,
-                            outcome.operational_status,
-                            frontier.failure_message,
+                        _with_negation_attempts(
+                            operational_result(
+                                theorem,
+                                tree.tactic_calls_made,
+                                outcome.operational_status,
+                                frontier.failure_message,
+                            ),
+                            negation_attempts,
                         )
                     )
-                if not outcome.actions and outcome.tactic_calls_used == 0:
+                if not outcome.made_progress:
                     frontier.failure_message = "no new tactics to try"
                     break
                 await evaluate_new_children(
@@ -145,6 +159,9 @@ class AndOrSearchEngine(SearchEngine):
                 backpropagate_actions(
                     outcome.actions,
                     update_values=True,
+                )
+                negation_attempts.extend(
+                    collect_new_negation_attempts(tree)
                 )
 
             if tree.root.status is StateNodeStatus.PROVED:
@@ -159,6 +176,11 @@ class AndOrSearchEngine(SearchEngine):
                 try:
                     proof_tree = extract_proof_tree(tree, theorem)
                 except (UnsupportedProofExtraction, ValueError) as error:
+                    failure_kind = "rendering"
+                    artifact_status = "rendering_failed"
+                    if isinstance(error, UnsupportedProofExtraction):
+                        failure_kind = "unsupported"
+                        artifact_status = "unsupported_extraction"
                     artifacts = extract_training_artifacts(
                         tree,
                         proved_context,
@@ -166,9 +188,21 @@ class AndOrSearchEngine(SearchEngine):
                     artifacts = artifacts_with_failure(
                         artifacts,
                         ExtractionFailure(
-                            kind="rendering",
+                            kind=failure_kind,
                             message=str(error),
+                            node_id=(
+                                error.node_id
+                                if isinstance(
+                                    error,
+                                    UnsupportedProofExtraction,
+                                )
+                                else None
+                            ),
                         ),
+                    )
+                    artifacts = _artifacts_with_negation_attempts(
+                        artifacts,
+                        negation_attempts,
                     )
                     return await finish(
                         SearchResult(
@@ -177,21 +211,25 @@ class AndOrSearchEngine(SearchEngine):
                             training_artifacts=artifacts,
                             search_budget_used=tree.tactic_calls_made,
                             diagnostics={
-                                "proof_artifact_status": "rendering_failed",
+                                "proof_artifact_status": artifact_status,
                                 "extraction_error": str(error),
                             },
                         ),
                     )
+                verified_result = await verify_extracted_tree(
+                    theorem,
+                    env_backend,
+                    attempt_context.verify_item_id,
+                    theorem_name,
+                    proof_tree,
+                    tree.tactic_calls_made,
+                    tree,
+                    proved_context,
+                )
                 return await finish(
-                    await verify_extracted_tree(
-                        theorem,
-                        env_backend,
-                        attempt_context.verify_item_id,
-                        theorem_name,
-                        proof_tree,
-                        tree.tactic_calls_made,
-                        tree,
-                        proved_context,
+                    _with_negation_attempts(
+                        verified_result,
+                        negation_attempts,
                     )
                 )
 
@@ -204,14 +242,19 @@ class AndOrSearchEngine(SearchEngine):
                     search_item_id=search_item_id,
                     verify_item_id=attempt_context.verify_item_id,
                 )
+                artifacts = extract_training_artifacts(
+                    tree,
+                    disproved_context,
+                )
+                artifacts = _artifacts_with_negation_attempts(
+                    artifacts,
+                    negation_attempts,
+                )
                 return await finish(
                     SearchResult(
                         theorem_id=theorem.id,
                         status=SearchStatus.DISPROVED,
-                        training_artifacts=extract_training_artifacts(
-                            tree,
-                            disproved_context,
-                        ),
+                        training_artifacts=artifacts,
                         search_budget_used=tree.tactic_calls_made,
                         diagnostics={
                             "root_status": tree.root.status.value,
@@ -227,14 +270,19 @@ class AndOrSearchEngine(SearchEngine):
                 search_item_id=search_item_id,
                 verify_item_id=attempt_context.verify_item_id,
             )
+            artifacts = extract_training_artifacts(
+                tree,
+                exhausted_context,
+            )
+            artifacts = _artifacts_with_negation_attempts(
+                artifacts,
+                negation_attempts,
+            )
             return await finish(
                 SearchResult(
                     theorem_id=theorem.id,
                     status=SearchStatus.EXHAUSTED,
-                    training_artifacts=extract_training_artifacts(
-                        tree,
-                        exhausted_context,
-                    ),
+                    training_artifacts=artifacts,
                     search_budget_used=tree.tactic_calls_made,
                     diagnostics={"root_status": tree.root.status.value},
                 )
@@ -275,3 +323,42 @@ class AndOrSearchEngine(SearchEngine):
 __all__ = [
     "AndOrSearchEngine",
 ]
+
+
+def _with_negation_attempts(
+    result: SearchResult,
+    attempts: list[NegationAttempt],
+) -> SearchResult:
+    if not attempts:
+        return result
+    artifacts = result.training_artifacts or TrainingArtifacts()
+    return result.model_copy(
+        update={
+            "training_artifacts": _artifacts_with_negation_attempts(
+                artifacts,
+                attempts,
+            )
+        }
+    )
+
+
+def _artifacts_with_negation_attempts(
+    artifacts: TrainingArtifacts,
+    attempts: list[NegationAttempt],
+) -> TrainingArtifacts:
+    if not attempts:
+        return artifacts
+    return artifacts.model_copy(
+        update={
+            "negation_attempts": [
+                *artifacts.negation_attempts,
+                *attempts,
+            ],
+            "diagnostics": {
+                **artifacts.diagnostics,
+                "negation_attempts": (
+                    len(artifacts.negation_attempts) + len(attempts)
+                ),
+            },
+        }
+    )

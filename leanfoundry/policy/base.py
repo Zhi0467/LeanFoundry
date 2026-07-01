@@ -36,6 +36,18 @@ class PolicySamplingParams(LeanFoundryModel):
     )
 
 
+class PolicyContext(LeanFoundryModel):
+    """Inference-only context for tactic sampling."""
+
+    proof_prefix: str = Field(
+        default="",
+        description=(
+            "Root-to-state tactic history, including comments. This is prompt "
+            "context only, not a separate training target."
+        ),
+    )
+
+
 class PolicyClient(Protocol):
     """Model-agnostic policy endpoint used by search and rollouts."""
 
@@ -45,6 +57,7 @@ class PolicyClient(Protocol):
         *,
         n: int,
         params: PolicySamplingParams | Mapping[str, Any] | None = None,
+        context: Sequence[PolicyContext] | None = None,
     ) -> list[list[str]]:
         """Return n tactic candidates for each proof state."""
 

@@ -16,6 +16,8 @@ from lean_client.exec_models import (
     ExecLimitsResponse,
     ExecStatsResponse,
     ExecStepBatchResult,
+    ExecVerifyItem,
+    ExecVerifyResponse,
     ExecVerifyResult,
 )
 
@@ -95,6 +97,17 @@ class KiminaEnvBackend:
             code,
             theorem_name,
             allowed_axioms=allowed_axioms,
+            env_profile=env_profile,
+        )
+
+    async def verify(
+        self,
+        items: list[ExecVerifyItem],
+        *,
+        env_profile: str | None = None,
+    ) -> ExecVerifyResponse:
+        return await self._require_backend().verify(
+            items,
             env_profile=env_profile,
         )
 

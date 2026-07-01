@@ -16,6 +16,15 @@ from leanfoundry.schemas import ProofTree, TheoremSpec
 class UnsupportedProofExtraction(ValueError):
     """Raised when the solved tree has no sound tactic-script rendering yet."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        node_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.node_id = node_id
+
 
 def extract_proof_tree(tree: SearchTree, theorem: TheoremSpec) -> ProofTree:
     """Project a proved runtime tree into a durable ``ProofTree``.
@@ -118,7 +127,8 @@ def _reject_split_coupled_children(action: ActionNode) -> None:
         raise UnsupportedProofExtraction(
             "cannot render a split action whose child owns multiple "
             f"focused goals; action={action.tactic!r}, "
-            f"child_node={child.node_id!r}, focus={focus!r}"
+            f"child_node={child.node_id!r}, focus={focus!r}",
+            node_id=child.node_id,
         )
 
 

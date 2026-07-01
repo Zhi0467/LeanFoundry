@@ -1,3 +1,11 @@
+def _drop_slime_modules() -> None:
+    import sys
+
+    for module_name in list(sys.modules):
+        if module_name == "slime" or module_name.startswith("slime."):
+            sys.modules.pop(module_name)
+
+
 def test_leanfoundry_imports() -> None:
     import leanfoundry
 
@@ -56,3 +64,22 @@ def test_tactic_node_preserves_branching_tree_shape() -> None:
     dumped = tree.model_dump()
 
     assert len(dumped["roots"][0]["children"]) == 2
+
+
+def test_core_imports_do_not_import_slime() -> None:
+    import sys
+
+    _drop_slime_modules()
+    import leanfoundry.policy  # noqa: F401
+    import leanfoundry.proofsearch  # noqa: F401
+
+    assert "slime" not in sys.modules
+
+
+def test_slime_package_import_is_lazy() -> None:
+    import sys
+
+    _drop_slime_modules()
+    import leanfoundry.slime  # noqa: F401
+
+    assert "slime" not in sys.modules

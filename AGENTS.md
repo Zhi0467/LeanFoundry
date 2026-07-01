@@ -24,7 +24,8 @@ consumer that plugs in via stable interfaces.
   `leanfoundry/env_backend/kimina_backend.py` constructs the lean_client client.
 - Durable spine = SQLite (`leanfoundry/schemas/migrations/`). The Python
   Pydantic models are the **source of truth**; the SQL must match them (a test
-  enforces this).
+  enforces this). Stable-schema release rules live in
+  `docs/design/schema_release_governance.md`.
 - Schemas are strict and minimal: `extra="forbid"`, `frozen=True`. Store only
   what is read, not how it was produced.
 - Expansion splits goals by metavariable coupling: independent subgoals become
@@ -41,10 +42,13 @@ consumer that plugs in via stable interfaces.
   over OR actions; final `/exec/verify` is still required. Direct whole-proof
   search uses `max_direct_candidates` / `direct_candidates_per_round`; tree
   search uses `max_tactic_calls` plus selector knobs
-  `puct_exploration_weight` / `best_first_missing_value_score`. Deferred:
-  graph/MCGS, negation pruning, HER, real model adapters, bonded value
-  factory/labels, and richer proof rendering for split children that own
-  multiple focused goals. Search attempts now receive runner-owned
+  `puct_exploration_weight` / `best_first_missing_value_score`. Value serving,
+  bonded label emission, provenance-gated negation-backed `DISPROVED`, durable
+  negation attempts, and nested persistent negation proof search have runnable
+  baselines. Deferred: graph/MCGS, benchmark-specific remote
+  adapters/deployment wiring, and richer Path-B proof rendering for split
+  children that own multiple focused goals. Search attempts now receive
+  runner-owned
   `SearchAttemptContext` ids: tree state uses `search_item_id`, final verify
   uses `verify_item_id`, direct verifier attempts use `verify_item_id:k`, and
   checked cleanup/cancel is runner lifecycle work. Training extraction returns a
@@ -53,6 +57,17 @@ consumer that plugs in via stable interfaces.
   are per-step grounded and can survive Path-B rendering or verification
   failure. Root-runtime-`OPEN` exhaustion emits no policy data and only
   effort-gated censored value labels in bonded mode.
+- Training adapter contract (v11.15): tree search training data is lineage-A
+  step-level `(proof_state, tactic)` data; direct/self-correct is lineage-B
+  whole-proof data. Do NOT render a whole proof from the tree as the data path.
+  The in-repo Slime adapter spec is `docs/design/slime_adapter_spec.md`;
+  LeanFoundry owns Sample token/loss-mask construction, env-profile validation,
+  self-correct trace rows, value-client modes (bonded/unbonded and numeric/NL
+  scalar), and negation-backed DISPROVED semantics.
+- Extension C / TTT has framework-neutral contracts, a callback-driven
+  orchestration loop, an opt-in promotion gate, and durable promoted-trace
+  replay rows. Concrete trainer-side fine-tuning/reload and MCGS/per-problem
+  search sources remain downstream/future work.
 
 ## How to work here (maintainer's standing preferences)
 
@@ -91,6 +106,7 @@ consumer that plugs in via stable interfaces.
 - Future-facing plan: `docs/internal-trackers/todo.md`.
 - Completed slice log: `docs/internal-trackers/implementation-log.md`.
 - Schemas: `leanfoundry/schemas/`. Interfaces: `env_backend/`, `policy/`,
-  `proofsearch/`, `rl_engine/`.
-- Next slice: richer proof rendering or real policy/value adapters, depending
-  on the tracker.
+  `proofsearch/`, `slime/` (training extra only).
+- Next slice: follow `docs/internal-trackers/todo.md`; shortest runnable
+  training path is Phase 2 reference clients -> Phase 3 Slime adapter, while
+  value serving/negation are required for the full Aristotle-like loop.

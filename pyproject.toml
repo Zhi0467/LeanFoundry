@@ -26,10 +26,23 @@ dependencies = [
     "lean-client",
 ]
 
+[project.scripts]
+leanfoundry-reconcile-lifecycle = "leanfoundry.replay.lifecycle_cli:main"
+leanfoundry-validate-backend = "leanfoundry.env_backend.validation_cli:main"
+leanfoundry-router = "leanfoundry.scaleout.router_cli:main"
+leanfoundry-router-worker = "leanfoundry.scaleout.worker_cli:main"
+leanfoundry-budget-meter = "leanfoundry.evals.budget_cli:main"
+
 [project.optional-dependencies]
+scaleout = [
+    "zstandard>=0.23.0",
+]
+
 # Training-cluster only (Linux + CUDA). Installed explicitly with
-# `uv sync --extra training`; not part of the default install. See the Slime
-# adapter notes in docs/internal-trackers/todo.md.
+# `uv sync --extra training`; not part of the default install. Slime is pinned
+# to an explicit commit in [tool.uv.sources]; bump it deliberately and re-run
+# the `slime` compat tests, never track main. See the Slime adapter notes in
+# docs/internal-trackers/todo.md.
 training = [
     "slime",
 ]
@@ -47,6 +60,12 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["leanfoundry*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end tests requiring a live kimina-lean-server (opt-in via LEANFOUNDRY_E2E=1)",
+    "slime: Slime API-compat tests; require the [training] extra (uv run --extra training pytest -m slime). Skip when slime is not installed.",
+]
 
 [tool.black]
 line-length = 88
@@ -74,4 +93,4 @@ known_first_party = ["leanfoundry"]
 
 [tool.uv.sources]
 lean-client = { git = "https://github.com/Zhi0467/kimina-lean-server.git", subdirectory = "packages/lean-client", branch = "main" }
-slime = { git = "https://github.com/THUDM/slime.git" }
+slime = { git = "https://github.com/THUDM/slime.git", rev = "a897e1f40357fdf3b148f1eb4ce26e1aeccfcd2c" }

@@ -7,6 +7,9 @@ from typing import Protocol
 
 from leanfoundry.schemas import (
     ATypeDataRecord,
+    AttemptLifecycleRecord,
+    ExtractionFailureRecord,
+    NegationAttemptRecord,
     TheoremRecord,
     PolicyExample,
     TrajectoryRecord,
@@ -34,6 +37,31 @@ class ReplayStore(Protocol):
 
     async def put_trajectory(self, trajectory: TrajectoryRecord) -> None:
         """Insert one search trajectory."""
+
+    async def put_attempt_lifecycle_records(
+        self,
+        records: Sequence[AttemptLifecycleRecord],
+    ) -> None:
+        """Insert backend cleanup/cancel lifecycle records."""
+
+    async def put_extraction_failures(
+        self,
+        records: Sequence[ExtractionFailureRecord],
+    ) -> None:
+        """Insert extraction/rendering failure records."""
+
+    async def put_negation_attempts(
+        self,
+        records: Sequence[NegationAttemptRecord],
+    ) -> None:
+        """Insert synthetic-negation proof attempt records."""
+
+    async def get_pending_attempt_lifecycle_records(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> list[AttemptLifecycleRecord]:
+        """Fetch non-terminal lifecycle records ready for reconciliation."""
 
     async def put_value_labels(self, labels: Sequence[ValueLabel]) -> None:
         """Insert value labels extracted from search."""

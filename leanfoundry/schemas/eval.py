@@ -17,6 +17,55 @@ class EvalMode(StrEnum):
     STATE_TOKEN_SEARCH = "mcts_state_token"
 
 
+class BenchmarkCompatibility(StrEnum):
+    """Compatibility of a benchmark split with an env profile."""
+
+    COMPATIBLE = "compatible"
+    NEEDS_REVERIFY = "needs_reverify"
+    INCOMPATIBLE = "incompatible"
+
+
+class BenchmarkManifest(LeanFoundryModel):
+    """Manifest describing a benchmark split before loading theorem rows."""
+
+    id: str = Field(description="Stable benchmark manifest id.")
+    name: str = Field(description="Benchmark family name, e.g. miniF2F.")
+    split: str = Field(description="Benchmark split, e.g. train/valid/test.")
+    source: str = Field(description="Source repo, dataset, or file URI.")
+    row_format: str = Field(
+        default="leanfoundry_jsonl",
+        min_length=1,
+        description=(
+            "JSONL row format for theorem loading. The default means each "
+            "row is a serialized TheoremSpec; other values require a "
+            "benchmark-specific row adapter at load time."
+        ),
+    )
+    env_profile: str = Field(description="Required execution env profile.")
+    compatibility: BenchmarkCompatibility = Field(
+        description="Whether this benchmark is compatible with env_profile."
+    )
+    contamination_policy: str = Field(
+        description="How overlap with train/eval pools is handled."
+    )
+    fixed_assignment_id: str = Field(
+        description="Stable id for the fixed held-out assignment."
+    )
+    benchmark_commit: str | None = Field(
+        default=None,
+        description="Dataset commit or version, if available.",
+    )
+    theorem_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Expected theorem count, if known before loading.",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Human-readable caveats for this benchmark split.",
+    )
+
+
 class SamplingConfig(LeanFoundryModel):
     """Sampling configuration recorded in eval manifests."""
 

@@ -169,3 +169,6 @@ dynamic_database.json
 raid/
 
 outputs-*
+
+# mutmut mutation-testing sandbox
+mutants/

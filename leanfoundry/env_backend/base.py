@@ -17,6 +17,8 @@ from lean_client.exec_models import (
     ExecLimitsResponse,
     ExecStatsResponse,
     ExecStepBatchResult,
+    ExecVerifyItem,
+    ExecVerifyResponse,
     ExecVerifyResult,
 )
 from pydantic import Field
@@ -130,6 +132,14 @@ class EnvBackend(Protocol):
         env_profile: str | None = None,
     ) -> ExecVerifyResult:
         """Certify one complete Lean proof through the warm execution pool."""
+
+    async def verify(
+        self,
+        items: list[ExecVerifyItem],
+        *,
+        env_profile: str | None = None,
+    ) -> ExecVerifyResponse:
+        """Certify a batch of complete Lean proofs."""
 
     async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
         """Delete backend state associated with completed item ids."""

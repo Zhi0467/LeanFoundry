@@ -16,6 +16,11 @@ from leanfoundry.proofsearch.extraction import (
     extraction_context_for_theorem,
 )
 from leanfoundry.proofsearch.provenance import should_try_negation
+from leanfoundry.proofsearch.to_rows import (
+    TrainingRow,
+    TrainingSegment,
+    to_training_rows,
+)
 
 __all__ = [
     "ExtractionContext",
@@ -30,4 +35,7 @@ __all__ = [
     "extraction_context_for_theorem",
     "run_search_batch",
     "should_try_negation",
+    "to_training_rows",
+    "TrainingRow",
+    "TrainingSegment",
 ]

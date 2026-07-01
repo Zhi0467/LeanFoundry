@@ -36,11 +36,24 @@ In practice, multiple independent MCGS runs execute against a single decompositi
 
 **The core design decision**: the value model can be in one of two configurations relative to the policy, and LeanFoundry needs to make this an explicit initialization parameter because the two configurations have different infra responsibilities.
 
-**Bonded mode**: the value model and policy are the same checkpoint, distinguished by a task token in the prompt (as in Aristotle). LeanFoundry owns the full value training loop: label generation (positive, censored negative, disproved), warm-start from proof structure data before MCTS begins, and co-training alongside the policy. The `PolicyClient` interface handles both tactic sampling and value estimation. Cold-start in this mode: LeanFoundry bootstraps value labels from verified SFT proofs (every state on a known proof path is label=1; proof_depth/proof_size give weak ordering signal), giving the value model an initial prior before the first MCTS round. LCB selection in early rounds uses these weak labels; the estimates improve as MCTS generates real search traces.
+**Bonded mode**: the value model and policy are the same checkpoint,
+distinguished by a value task prompt/token (as in Aristotle). LeanFoundry owns
+the full value training loop: label generation (positive, censored negative,
+disproved), warm-start from proof structure data before MCTS begins, and
+co-training alongside the policy. The code boundary still exposes this through a
+separate `ValueClient` wrapper; `PolicyClient` remains responsible for tactic
+and proof generation. Cold-start in this mode: LeanFoundry bootstraps value
+labels from verified SFT proofs (every state on a known proof path is label=1;
+proof_depth/proof_size give weak ordering signal), giving the value model an
+initial prior before the first MCTS round. LCB selection in early rounds uses
+these weak labels; the estimates improve as MCTS generates real search traces.
 
 **Unbonded mode**: the value model is external — owned, trained, and served entirely by the training repo. LeanFoundry does not know how the value model was trained or what its architecture is. In this mode LeanFoundry must:
 1. Expose a separate `ValueClient` protocol (distinct from `PolicyClient`) that the training repo plugs in
-2. Ensure `FactorizedProofState` is richly serializable — the external value model needs full goal expressions, local context, metavariable coupling groups, and tactic history to score a state
+2. Ensure `FactorizedProofState` is sufficiently serializable for the value
+   prompt — current open goals plus local context and backend state token are
+   the Markov observation; tactic history is optional prompt context, not a
+   separate state field or training target
 3. Call `ValueClient.estimate(states)` at each expansion, passing the full `FactorizedProofState` objects
 4. Not generate or store value labels internally — this is entirely the training repo's concern
 
@@ -103,14 +116,25 @@ This matters because TTT traces are highly distribution-shifted relative to the 
 
 ## Train Repo vs Infra Repo: Responsibility Boundary
 
-The infra repo (LeanFoundry) owns execution, search, replay, and evaluation. The training repo owns curriculum, rollout logic, outer loops, and experiment configuration. This section makes the boundary explicit for the two outer loop patterns most relevant to Aristotle-style training.
+The infra repo (LeanFoundry) owns execution, search, replay, evaluation, and the
+default Slime proof-search rollout adapter. The training repo owns curriculum,
+cluster launch, hyperparameters, experiment configuration, evaluation runs, and
+outer algorithm recipes such as lemma decomposition or SGS. This section makes
+the boundary explicit for the two outer loop patterns most relevant to
+Aristotle-style training.
 
-**Infra repo provides** (complete, no additions needed beyond G1 and the ValueClient split):
+**Infra repo provides** (the current implementation is tree-search, not graph
+MCGS; see `leanfoundry_system_design_v11.md` for exact status):
 - `EnvBackendClient.verify`: typecheck any Lean block, including `:= by sorry` for statement-only checking
 - `EnvBackendClient.step_batch`: stateless tactic execution
-- `SearchEngine`: MCGS over AND/OR hypergraph, initialized from `TheoremSpec.initial_lean_block`; accepts both `PolicyClient` and `ValueClient` as injectable dependencies
+- `SearchEngine`: AND/OR search over Lean proof states, initialized from
+  `TheoremSpec.initial_lean_block`; accepts both `PolicyClient` and
+  `ValueClient` as injectable dependencies
 - `PolicyClient`: tactic sampling and proof sampling (value estimation removed — see ambiguity C)
 - `ValueClient` protocol: single method `estimate(states: list[FactorizedProofState]) -> list[float]`; `BondedValueClient` wraps `PolicyClient` with a task token for bonded mode; training repo supplies its own implementation for unbonded mode
+- Slime rollout adapter: `leanfoundry.slime.generate_rollout` maps search
+  results into trainer-ready `Sample`s. The training repo can subclass hooks but
+  does not reimplement token/loss-mask plumbing.
 - `Data Buffer`: durable A-type and B-type storage; `state_value_labels` written by LeanFoundry only in bonded mode
 - `ProofTree.roots`: solved initial backend states after the runtime tree's
   synthetic initialization layer is skipped
@@ -482,7 +506,13 @@ def extract(state):
     return node
 ```
 
-This gives the training trajectory as a tree/DAG of tactic steps. Depth-first traversal then yields `(state, tactic)` policy examples, but the tree shape must be preserved for Lean branching syntax and HER extraction.
+This gives Aristotle's solved proof artifact as a tree/DAG of tactic steps.
+Depth-first traversal yields `(state, tactic)` policy examples. For
+LeanFoundry's current Path-A training data, those local step rows are the data:
+the tree shape is not required to train the step policy. Tree shape is required
+only for optional Path-B proof rendering/auditing and for any future
+Aristotle-style whole-subproof HER that tries to re-render and re-verify proved
+subtrees as standalone Lean proofs.
 
 ---
 
@@ -524,9 +554,18 @@ All three outputs — hidden CoT, inline comments, and formal tactics — are co
 
 **Value training**: proved states receive label 1. States extensively searched but never proved are **censored negatives** — label 0 at reduced weight, because "not proved by this policy at this budget" is not the same as mathematically false. States marked DISPROVED via negation pruning receive label 0 at full weight — they are definitively false. The schema must distinguish these two kinds of negatives.
 
-**Hindsight Experience Replay (HER)**: every proved non-root state in a proof subgraph is re-rendered as a standalone root theorem with its sub-proof. This multiplies training examples at zero additional Lean cost, with reported amplification of 10–50×. Candidates must pass Kimina re-verification before entering training. Two multipliers are tracked separately: `her_candidate_multiplier` (candidates per root proof) and `her_verified_multiplier` (verified candidates per root proof), because the gap between them is a key diagnostic.
+**Hindsight Experience Replay (HER)**: Aristotle-style subtree HER can
+re-render proved non-root states as standalone root theorems with sub-proofs,
+then pass them through Kimina re-verification before they enter whole-proof
+training. LeanFoundry's default lineage-A path uses a cheaper step-level HER:
+proved nodes directly yield local `(state, tactic)` policy examples and proved
+value labels without rendering. Track these separately: `step_her_multiplier`
+for step rows, and render candidate/verified multipliers only for optional
+lineage-B whole-proof artifacts.
 
-**Trajectory representation**: a proof with AND-splits is a tree, not a flat sequence. The canonical representation is:
+**Trajectory representation**: a proof with AND-splits is a tree, not a flat
+sequence when the goal is to reconstruct a whole Lean proof artifact. The
+canonical solved artifact representation is:
 
 ```python
 @dataclass
@@ -541,7 +580,15 @@ class ProofTree:
     rendered_lean: str         # canonical text from Mode A prefix
 ```
 
-This one representation serves all three uses: `rendered_lean` is the Lean proof text for final verification; depth-first traversal of the tree yields `(state, tactic)` pairs for tactic-policy SFT; any proved subtree is a HER candidate. The tree structure must be preserved in the trajectory — flattening to a sequence loses the structural information needed to reconstruct Lean's branching syntax (`case inl =>`, `case inr =>`).
+This representation serves the whole-proof artifact path: `rendered_lean` is
+the Lean proof text for final verification, and the tree is needed to
+reconstruct branching syntax (`case inl =>`, `case inr =>`) or to attempt
+standalone rendered-HER subproofs. LeanFoundry's default Path-A training path is
+simpler and intentionally local: proved runtime actions emit Markovian
+`(state, tactic)` step rows and value labels without rendering the tree. That
+flat step-row stream is not a loss of training signal for the step policy; it is
+the target used by the step-prover lineage. Rendering remains a separate
+product/audit artifact.
 
 ---
 
@@ -588,7 +635,10 @@ At scale, Aristotle runs iterative self-improvement at inference time: search, r
 
 **State equivalence is gated, not assumed** (Section 3.1). Tactics like `aesop` use global state that can violate the deduplication assumption. The tree-only baseline in early versions, with graph merging gated behind a pass/fail test, is the right discipline.
 
-**HER with reverification** (Section 3.4) correctly requires that HER candidates pass Kimina `/verify` before entering the training set. Tracking `her_candidate_multiplier` and `her_verified_multiplier` separately is right — the gap between them is a key diagnostic.
+**HER split by training target** (Section 3.4) correctly separates step-level
+proved-node reuse from optional rendered subtree artifacts. Lineage-A step HER
+does not require rendering or `/verify`; rendered lineage-B artifacts still do.
+Track `step_her_multiplier` separately from render candidate/verified metrics.
 
 **Censored negative value labels** (Section 3.5) correctly captures the statistical subtlety: a state not proved is not mathematically false. The minimum-effort threshold and downweighted loss are correct mitigations. The schema should additionally distinguish negation-pruned states (hard label=0, definitively false) from effort-exhausted states (censored label=0).
 
@@ -650,7 +700,9 @@ The informal proof context used to condition the policy during search belongs in
 
 ### Assessment: Is LeanFoundry Over-Specified?
 
-**The infrastructure repo is not over-specified.** The abstraction boundaries — PolicyClient, EnvBackend, RLEngineBase, SearchEngine as a parameterized type — are clean and genuinely swappable.
+**The infrastructure repo is not over-specified.** The abstraction boundaries —
+PolicyClient, ValueClient, EnvBackend, SearchEngine, and the pull-shaped Slime
+rollout entrypoint are clean and genuinely swappable.
 
 **The training repo is specific but correctly framed** as one concrete demonstration. Qwen3.6-27B, Slime/Megatron/SGLang, and pass-rate bucketing thresholds are heuristics owned by the training repo, changeable without touching the infra.
 

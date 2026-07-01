@@ -21,9 +21,25 @@ belongs to the runner lifecycle. Training extraction emits a `TrainingArtifacts`
 envelope; whole-proof candidates/A-type rows require final `/exec/verify`
 acceptance, while Path-A policy/proved-value artifacts are per-step grounded and
 can survive Path-B rendering or verification failure. Unproved root-open
-exhaustion emits no policy data. Deferred pieces remain graph/MCGS, negation
-pruning, HER, real policy/value adapters, bonded value-label plumbing, and
-richer proof rendering for split children that own multiple focused goals.
+exhaustion emits no policy data. Value serving, bonded value-label emission,
+provenance-gated negation-backed `DISPROVED`, durable negation attempts, and
+nested persistent negation proof search have runnable baselines. Deferred
+pieces remain graph/MCGS, benchmark-specific remote adapters/deployment wiring,
+and richer Path-B proof rendering for split children that own multiple focused
+goals.
+
+Training adapter correction: tree search emits lineage-A step rows
+`(proof_state, tactic)`; direct/self-correct emits lineage-B whole-proof rows.
+Do not render a whole proof from the tree as the training-data path. The
+authoritative adapter handoff is `docs/design/slime_adapter_spec.md`: LeanFoundry
+owns Slime Sample token/loss-mask construction, env-profile validation,
+self-correct trace rows, value-client modes, and negation-backed DISPROVED
+semantics.
+
+Extension C / TTT has framework-neutral contracts, a callback-driven
+orchestration loop, an opt-in promotion gate, and durable promoted-trace replay
+rows. Concrete trainer-side fine-tuning/reload and MCGS/per-problem search
+sources remain downstream/future work.
 
 **Keep AGENTS.md and this file current as you learn** — prefer updating them over
 re-deriving context. Keep both concise.

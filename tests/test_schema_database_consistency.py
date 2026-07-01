@@ -8,7 +8,10 @@ from pydantic.fields import FieldInfo
 from leanfoundry.proofsearch import SearchConfig
 from leanfoundry.schemas.records import (
     ATypeDataRecord,
+    AttemptLifecycleRecord,
+    ExtractionFailureRecord,
     FormalStatementStagingRecord,
+    NegationAttemptRecord,
     TheoremRecord,
 )
 from leanfoundry.schemas.trajectory import TrajectoryRecord
@@ -90,6 +93,8 @@ _TIMESTAMP_COLUMNS = {
     "added_at",
     "created_at",
     "pass_rate_updated_at",
+    "next_retry_at",
+    "updated_at",
 }
 
 _VALID_SQL_ROWS: dict[str, dict[str, Any]] = {
@@ -122,6 +127,33 @@ _VALID_SQL_ROWS: dict[str, dict[str, Any]] = {
         "disproved": False,
         "model_version": 0,
     },
+    "attempt_lifecycle_outbox": {
+        "id": "lifecycle",
+        "theorem_id": "thm",
+        "env_profile": "env",
+        "attempt_id": "attempt",
+        "backend_item_id": "attempt:search",
+        "lifecycle_stage": "cleanup",
+        "lifecycle_status": "deferred",
+    },
+    "extraction_failures": {
+        "id": "failure",
+        "theorem_id": "thm",
+        "env_profile": "env",
+        "failure_kind": "rendering",
+        "message": "render failed",
+    },
+    "negation_attempts": {
+        "id": "negation",
+        "theorem_id": "thm",
+        "env_profile": "env",
+        "source_node_id": "node",
+        "negated_target": "True",
+        "status": "proved",
+        "proved": True,
+        "tactic_calls_used": 1,
+        "payload_json": "{}",
+    },
 }
 
 _SQL_CHECK_CASES: dict[str, list[tuple[str, Any]]] = {
@@ -143,6 +175,28 @@ _SQL_CHECK_CASES: dict[str, list[tuple[str, Any]]] = {
         ("depth", -1),
         ("tactics_tried_on_subtree", -1),
     ],
+    "attempt_lifecycle_outbox": [
+        ("env_profile", ""),
+        ("attempt_id", ""),
+        ("backend_item_id", ""),
+        ("lifecycle_stage", "unknown"),
+        ("lifecycle_status", ""),
+        ("retry_count", -1),
+        ("max_retries", -1),
+    ],
+    "extraction_failures": [
+        ("env_profile", ""),
+        ("failure_kind", "unknown"),
+        ("message", ""),
+    ],
+    "negation_attempts": [
+        ("env_profile", ""),
+        ("source_node_id", ""),
+        ("negated_target", ""),
+        ("status", ""),
+        ("tactic_calls_used", -1),
+        ("payload_json", ""),
+    ],
 }
 
 TABLE_MODELS: dict[str, type[Any]] = {
@@ -150,6 +204,9 @@ TABLE_MODELS: dict[str, type[Any]] = {
     "a_type_data": ATypeDataRecord,
     "formal_statements_staging": FormalStatementStagingRecord,
     "trajectories": TrajectoryRecord,
+    "attempt_lifecycle_outbox": AttemptLifecycleRecord,
+    "extraction_failures": ExtractionFailureRecord,
+    "negation_attempts": NegationAttemptRecord,
     "policy_examples": PolicyExample,
     "state_value_labels": ValueLabel,
 }
@@ -218,6 +275,8 @@ def _expected_affinity(
         literal_types = {type(value) for value in get_args(annotation)}
         if literal_types == {int}:
             return "INTEGER"
+        if literal_types == {str}:
+            return "TEXT"
     if annotation is bool:
         return "NUMERIC"
     if annotation is int:

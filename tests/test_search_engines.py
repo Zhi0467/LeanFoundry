@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -18,6 +19,8 @@ from lean_client.exec_models import (
     ExecStateInfo,
     ExecStepBatchResult,
     ExecStepResult,
+    ExecVerifyItem,
+    ExecVerifyResponse,
     ExecVerifyResult,
 )
 
@@ -67,6 +70,7 @@ class FakePolicyClient:
         *,
         n: int,
         params=None,
+        context=None,
     ) -> list[list[str]]:
         state = states[0]
         self.tactic_calls.append((state.state_token, n))
@@ -116,6 +120,7 @@ class FakeEnvBackend:
             tuple[str, str, list[str], tuple[int, ...] | None]
         ] = []
         self.verify_calls: list[tuple[str, str, str]] = []
+        self.verify_batch_calls: list[list[str]] = []
         self.cleanup_calls: list[list[str]] = []
         self.cancel_calls: list[list[str]] = []
         self.events: list[tuple[str, str]] = []
@@ -198,6 +203,25 @@ class FakeEnvBackend:
             status="accepted",
             theorem_name=theorem_name,
         )
+
+    async def verify(
+        self,
+        items: list[ExecVerifyItem],
+        *,
+        env_profile: str | None = None,
+    ) -> ExecVerifyResponse:
+        self.verify_batch_calls.append([item.item_id for item in items])
+        results = [
+            await self.verify_one(
+                item.item_id,
+                item.code,
+                item.theorem_name,
+                allowed_axioms=item.allowed_axioms,
+                env_profile=env_profile,
+            )
+            for item in items
+        ]
+        return ExecVerifyResponse(items=results)
 
     async def cleanup(self, item_ids: list[str]) -> ExecCleanupResponse:
         self.cleanup_calls.append(item_ids)
@@ -381,11 +405,149 @@ def test_direct_engine_accepts_first_verified_candidate() -> None:
     assert result.verify_item_id == "direct-attempt:verify"
     assert result.proof_tree is not None
     assert result.proof_tree.verified
+    assert result.training_artifacts is not None
+    attempts = result.training_artifacts.direct_verification_attempts
+    assert [attempt.verifier_status for attempt in attempts] == [
+        "rejected",
+        "accepted",
+    ]
+    assert [attempt.accepted for attempt in attempts] == [False, True]
+    assert attempts[0].verify_item_id == "direct-attempt:verify:1"
+    assert attempts[1].proof.endswith("trivial")
     assert env.verify_calls[0][0] == "direct-attempt:verify:1"
     assert env.verify_calls[1][0] == "direct-attempt:verify:2"
     assert env.verify_calls[1][1].endswith("trivial")
+    assert env.verify_batch_calls == [
+        ["direct-attempt:verify:1", "direct-attempt:verify:2"]
+    ]
     assert env.cleanup_calls == []
     assert policy.proof_prompts == ["theorem t : True := by\n  sorry"]
+
+
+def test_direct_engine_verifies_full_candidate_pool_after_success() -> None:
+    engine = DirectSearchEngine()
+    policy = FakePolicyClient(
+        proof_batches=[
+            [
+                "theorem t : True := by\n  trivial",
+                "theorem t : True := by\n  exact bad",
+                "theorem t : True := by\n  exact True.intro",
+            ]
+        ]
+    )
+    env = FakeEnvBackend(
+        verify_results=[
+            ExecVerifyResult(
+                item_id="verify",
+                status="accepted",
+                theorem_name="t",
+            ),
+            ExecVerifyResult(
+                item_id="verify",
+                status="rejected",
+                theorem_name="t",
+                messages=[ExecMessage(severity="error", data="unknown bad")],
+            ),
+            ExecVerifyResult(
+                item_id="verify",
+                status="accepted",
+                theorem_name="t",
+            ),
+        ]
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=direct_attempt("direct-pass-k"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.DIRECT,
+                max_direct_candidates=3,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.PROVED
+    assert result.search_budget_used == 3
+    assert result.proof_tree is not None
+    assert result.proof_tree.rendered_lean.endswith("trivial")
+    assert result.training_artifacts is not None
+    artifacts = result.training_artifacts
+    attempts = artifacts.direct_verification_attempts
+    assert [attempt.verifier_status for attempt in attempts] == [
+        "accepted",
+        "rejected",
+        "accepted",
+    ]
+    assert [attempt.accepted for attempt in attempts] == [
+        True,
+        False,
+        True,
+    ]
+    assert [
+        proof.rendered_lean for proof in artifacts.proof_candidates
+    ] == [
+        "theorem t : True := by\n  trivial",
+        "theorem t : True := by\n  exact True.intro",
+    ]
+    assert artifacts.diagnostics["proof_candidates"] == 2
+    assert artifacts.diagnostics["direct_verification_attempts"] == 3
+    assert [call[0] for call in env.verify_calls] == [
+        "direct-pass-k:verify:1",
+        "direct-pass-k:verify:2",
+        "direct-pass-k:verify:3",
+    ]
+    assert env.verify_batch_calls == [
+        [
+            "direct-pass-k:verify:1",
+            "direct-pass-k:verify:2",
+            "direct-pass-k:verify:3",
+        ]
+    ]
+    assert env.verify_calls[1][1].endswith("exact bad")
+    assert env.verify_calls[2][1].endswith("True.intro")
+
+
+def test_direct_engine_exhaustion_keeps_rejected_attempt_trace() -> None:
+    engine = DirectSearchEngine()
+    policy = FakePolicyClient(
+        proof_batches=[["theorem t : True := by\n  exact bad"]]
+    )
+    env = FakeEnvBackend(
+        verify_results=[
+            ExecVerifyResult(
+                item_id="verify",
+                status="rejected",
+                theorem_name="t",
+                messages=[ExecMessage(severity="error", data="unknown bad")],
+            )
+        ]
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=direct_attempt("direct-exhausted"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.DIRECT,
+                max_direct_candidates=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.EXHAUSTED
+    assert result.training_artifacts is not None
+    attempts = result.training_artifacts.direct_verification_attempts
+    assert len(attempts) == 1
+    assert attempts[0].candidate_index == 1
+    assert attempts[0].verifier_feedback == "rejected\nerror: unknown bad"
+    assert not attempts[0].accepted
 
 
 def test_self_correct_feeds_back_verifier_message() -> None:
@@ -431,6 +593,21 @@ def test_self_correct_feeds_back_verifier_message() -> None:
     assert result.status is SearchStatus.PROVED
     assert result.search_budget_used == 2
     assert "unknown bad" in policy.proof_prompts[1]
+    assert result.training_artifacts is not None
+    traces = result.training_artifacts.self_correct_traces
+    assert len(traces) == 1
+    assert [turn.accepted for turn in traces[0].turns] == [False, True]
+    assert traces[0].turns[0].verifier_feedback == (
+        "rejected\nerror: unknown bad"
+    )
+    assert traces[0].turns[1].verify_item_id == (
+        "self-correct-attempt:verify:2"
+    )
+    attempts = result.training_artifacts.direct_verification_attempts
+    assert [attempt.verifier_status for attempt in attempts] == [
+        "rejected",
+        "accepted",
+    ]
 
 
 def test_tree_engine_extracts_and_verifies_single_tactic_proof() -> None:
@@ -641,7 +818,9 @@ def test_tree_engine_rejects_split_coupled_multi_goal_extraction() -> None:
     assert result.status is SearchStatus.ERROR
     assert result.proof_tree is None
     assert "multiple focused goals" in result.diagnostics["extraction_error"]
-    assert result.diagnostics["proof_artifact_status"] == "rendering_failed"
+    assert result.diagnostics["proof_artifact_status"] == (
+        "unsupported_extraction"
+    )
     assert result.training_artifacts is not None
     examples = result.training_artifacts.policy_examples
     observed = [(example.proof_prefix, example.tactic) for example in examples]
@@ -650,7 +829,10 @@ def test_tree_engine_rejects_split_coupled_multi_goal_extraction() -> None:
         ("splitter", "solve_coupled"),
         ("splitter", "solve_independent"),
     ]
-    assert result.training_artifacts.failures[0].kind == "rendering"
+    assert result.training_artifacts.failures[0].kind == "unsupported"
+    assert result.training_artifacts.failures[0].node_id == (
+        "coupled-attempt:search:2"
+    )
     assert env.step_calls[1][3] == (0, 1)
     assert env.step_calls[2][3] == (2,)
     assert env.verify_calls == []
@@ -686,7 +868,7 @@ def test_tree_engine_verify_rejection_keeps_path_a_artifacts() -> None:
             env_backend=env,
             config=SearchConfig(
                 algorithm=SearchAlgorithm.PUCT_TREE,
-                max_tactic_calls=1,
+                max_tactic_calls=2,
                 tactics_per_expansion=1,
                 value_mode="bonded",
                 min_censored_negative_effort=1,
@@ -795,6 +977,11 @@ def test_tree_engine_counts_proved_alternatives_from_one_expansion() -> None:
     assert result.proof_tree.roots[0].tactic == "trivial"
     assert result.training_artifacts.diagnostics["proved_actions"] == 2
     assert result.training_artifacts.diagnostics["proved_alternatives"] == 1
+    tactics = sorted(
+        example.tactic
+        for example in result.training_artifacts.policy_examples
+    )
+    assert tactics == ["exact True.intro", "trivial"]
 
 
 def test_best_first_tree_uses_child_values_for_next_frontier() -> None:
@@ -1021,6 +1208,466 @@ def test_tree_engine_maps_explicit_disproved_root(monkeypatch) -> None:
     assert label.weight == 1.0
     assert label.disproved
     assert label.state.state_token == "disproved-root"
+
+
+def test_tree_engine_try_negation_marks_eligible_state_disproved() -> None:
+    class NegationEnv(FakeEnvBackend):
+        async def create_states(
+            self,
+            item_id: str,
+            code: str,
+            *,
+            env_profile: str | None = None,
+        ) -> ExecCreateStatesResponse:
+            self.create_calls.append((item_id, code))
+            self.events.append(("create", item_id))
+            if len(self.create_calls) == 1:
+                states = [root_state()]
+            else:
+                assert "¬ (True)" in code
+                states = [root_state("negation-token")]
+            return ExecCreateStatesResponse(
+                items=[
+                    ExecCreateStatesResult(
+                        item_id=item_id,
+                        status="open",
+                        states=states,
+                    )
+                ]
+            )
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(
+        tactic_batches=[
+            ["bad"],
+            ["exact not_true"],
+        ]
+    )
+    env = NegationEnv(
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="bad", status="error")],
+            ),
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="exact not_true",
+                        status="complete",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem().model_copy(update={"source": "autoformalized"}),
+            attempt_context=tree_attempt("negation-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=2,
+                tactics_per_expansion=1,
+                try_negation=True,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.DISPROVED
+    assert result.search_budget_used == 2
+    assert len(env.create_calls) == 2
+    assert env.step_calls[1][1] == "negation-token"
+    assert result.training_artifacts is not None
+    assert len(result.training_artifacts.policy_examples) == 1
+    policy_example = result.training_artifacts.policy_examples[0]
+    assert policy_example.state.state_token == "negation-token"
+    assert policy_example.tactic == "exact not_true"
+    assert policy_example.proof_prefix == ""
+    assert len(result.training_artifacts.negation_attempts) == 1
+    negation_attempt = result.training_artifacts.negation_attempts[0]
+    assert negation_attempt.status == "proved"
+    assert negation_attempt.proved
+    assert negation_attempt.proved_tactic == "exact not_true"
+    assert negation_attempt.tactic_calls_used == 1
+    assert negation_attempt.step_item_id is not None
+    assert negation_attempt.rendered_lean is not None
+    assert "¬ (True)" in negation_attempt.rendered_lean
+    assert negation_attempt.tactic_attempts[0].status == "complete"
+    assert len(result.training_artifacts.value_labels) == 1
+    label = result.training_artifacts.value_labels[0]
+    assert label.label == 0
+    assert label.disproved
+    assert label.weight == 1.0
+
+
+def test_tree_engine_retries_open_negation_action() -> None:
+    class NegationEnv(FakeEnvBackend):
+        async def create_states(
+            self,
+            item_id: str,
+            code: str,
+            *,
+            env_profile: str | None = None,
+        ) -> ExecCreateStatesResponse:
+            self.create_calls.append((item_id, code))
+            self.events.append(("create", item_id))
+            if len(self.create_calls) == 1:
+                states = [root_state()]
+            else:
+                assert "¬ (True)" in code
+                states = [root_state("negation-token")]
+            return ExecCreateStatesResponse(
+                items=[
+                    ExecCreateStatesResult(
+                        item_id=item_id,
+                        status="open",
+                        states=states,
+                    )
+                ]
+            )
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(
+        tactic_batches=[
+            ["bad"],
+            ["exact failed_negation"],
+            ["exact not_true"],
+        ]
+    )
+    env = NegationEnv(
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="bad", status="error")],
+            ),
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="exact failed_negation",
+                        status="error",
+                    )
+                ],
+            ),
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="exact not_true",
+                        status="complete",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem().model_copy(update={"source": "autoformalized"}),
+            attempt_context=tree_attempt("negation-retry-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=3,
+                tactics_per_expansion=1,
+                try_negation=True,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.DISPROVED
+    assert result.search_budget_used == 3
+    assert len(env.create_calls) == 2
+    assert [call[0] for call in policy.tactic_calls] == [
+        "root-token",
+        "negation-token",
+        "negation-token",
+    ]
+    assert [call[0] for call in env.step_calls] == [
+        "negation-retry-attempt:search:1",
+        "negation-retry-attempt:search:2",
+        "negation-retry-attempt:search:2",
+    ]
+    assert result.training_artifacts is not None
+    statuses = [
+        attempt.status
+        for attempt in result.training_artifacts.negation_attempts
+    ]
+    assert statuses == ["proved"]
+    examples = result.training_artifacts.policy_examples
+    observed_examples = [
+        (example.state.state_token, example.tactic)
+        for example in examples
+    ]
+    assert observed_examples == [
+        ("negation-token", "exact not_true")
+    ]
+
+
+def test_tree_engine_searches_nested_negation_subgoals() -> None:
+    class NegationEnv(FakeEnvBackend):
+        async def create_states(
+            self,
+            item_id: str,
+            code: str,
+            *,
+            env_profile: str | None = None,
+        ) -> ExecCreateStatesResponse:
+            self.create_calls.append((item_id, code))
+            self.events.append(("create", item_id))
+            if len(self.create_calls) == 1:
+                states = [root_state()]
+            else:
+                assert "¬ (True)" in code
+                states = [root_state("negation-token")]
+            return ExecCreateStatesResponse(
+                items=[
+                    ExecCreateStatesResult(
+                        item_id=item_id,
+                        status="open",
+                        states=states,
+                    )
+                ]
+            )
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(
+        tactic_batches=[
+            ["bad"],
+            ["intro h"],
+            ["exact h"],
+        ]
+    )
+    env = NegationEnv(
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="bad", status="error")],
+            ),
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="intro h",
+                        status="open",
+                        state_token="neg-subgoal-token",
+                        goals=[
+                            ExecGoalInfo(
+                                target="False",
+                                pretty="h : True\n|- False",
+                            )
+                        ],
+                    )
+                ],
+            ),
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="exact h",
+                        status="complete",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem().model_copy(update={"source": "autoformalized"}),
+            attempt_context=tree_attempt("negation-nested-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=3,
+                tactics_per_expansion=1,
+                try_negation=True,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.DISPROVED
+    assert result.search_budget_used == 3
+    assert [call[0] for call in policy.tactic_calls] == [
+        "root-token",
+        "negation-token",
+        "neg-subgoal-token",
+    ]
+    assert result.training_artifacts is not None
+    examples = result.training_artifacts.policy_examples
+    assert [
+        (
+            example.state.state_token,
+            example.proof_prefix,
+            example.tactic,
+        )
+        for example in examples
+    ] == [
+        ("negation-token", "", "intro h"),
+        ("neg-subgoal-token", "intro h", "exact h"),
+    ]
+    assert len(result.training_artifacts.negation_attempts) == 1
+    negation_attempt = result.training_artifacts.negation_attempts[0]
+    assert negation_attempt.status == "proved"
+    assert negation_attempt.proved
+    assert negation_attempt.proved_tactic == "intro h"
+    assert negation_attempt.tactic_calls_used == 2
+    assert negation_attempt.tactic_attempts[0].status == "proved_subtree"
+    assert len(result.training_artifacts.value_labels) == 1
+    assert result.training_artifacts.value_labels[0].disproved
+
+
+def test_tree_engine_try_negation_abstracts_local_definitions() -> None:
+    def local_definition_state(token: str = "root-token") -> ExecStateInfo:
+        return ExecStateInfo(
+            state_token=token,
+            goals=[
+                ExecGoalInfo(
+                    target="n = n",
+                    pretty="n : Nat := 0\n|- n = n",
+                    hypotheses=[
+                        {
+                            "name": "n",
+                            "type": "Nat",
+                            "value": "0",
+                        }
+                    ],
+                )
+            ],
+        )
+
+    class NegationEnv(FakeEnvBackend):
+        async def create_states(
+            self,
+            item_id: str,
+            code: str,
+            *,
+            env_profile: str | None = None,
+        ) -> ExecCreateStatesResponse:
+            self.create_calls.append((item_id, code))
+            self.events.append(("create", item_id))
+            if len(self.create_calls) == 1:
+                states = [local_definition_state()]
+            else:
+                assert "(n : Nat)" in code
+                assert ":= 0" not in code
+                assert "¬ (n = n)" in code
+                states = [root_state("negation-token")]
+            return ExecCreateStatesResponse(
+                items=[
+                    ExecCreateStatesResult(
+                        item_id=item_id,
+                        status="open",
+                        states=states,
+                    )
+                ]
+            )
+
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(
+        tactic_batches=[
+            ["bad"],
+            ["exact absurd_n_eq_n"],
+        ]
+    )
+    env = NegationEnv(
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="bad", status="error")],
+            ),
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[
+                    ExecStepResult(
+                        tactic="exact absurd_n_eq_n",
+                        status="complete",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem().model_copy(update={"source": "autoformalized"}),
+            attempt_context=tree_attempt("negation-local-def-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=2,
+                tactics_per_expansion=1,
+                try_negation=True,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.DISPROVED
+    assert len(env.create_calls) == 2
+    assert result.training_artifacts is not None
+    assert len(result.training_artifacts.negation_attempts) == 1
+    negation_attempt = result.training_artifacts.negation_attempts[0]
+    assert negation_attempt.status == "proved"
+    assert negation_attempt.rendered_lean is not None
+    assert "(n : Nat)" in negation_attempt.rendered_lean
+    assert ":= 0" not in negation_attempt.rendered_lean
+    assert "¬ (n = n)" in negation_attempt.rendered_lean
+
+
+def test_tree_engine_try_negation_is_provenance_gated() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    policy = FakePolicyClient(tactic_batches=[["bad"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="bad", status="error")],
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem().model_copy(update={"source": "leandojo"}),
+            attempt_context=tree_attempt("negation-gated-attempt"),
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+                try_negation=True,
+                value_mode="bonded",
+                min_censored_negative_effort=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.EXHAUSTED
+    assert len(env.create_calls) == 1
+    assert len(env.step_calls) == 1
+    assert result.training_artifacts is not None
+    assert result.training_artifacts.value_labels[0].disproved is False
 
 
 def test_tree_engine_reports_mixed_overloaded_backend_protocol_error() -> None:
@@ -1324,6 +1971,53 @@ def test_tree_engine_retries_deferred_cleanup_after_verification() -> None:
     ]
 
 
+def test_tree_engine_reports_bounded_deferred_cleanup_ids() -> None:
+    engine = build_engine(SearchConfig(algorithm=SearchAlgorithm.PUCT_TREE))
+    context = SearchAttemptContext(
+        attempt_id="cleanup-open-attempt",
+        search_item_id="cleanup-open-attempt:search",
+        verify_item_id="cleanup-open-attempt:verify",
+        cleanup_max_attempts=2,
+    )
+    policy = FakePolicyClient(tactic_batches=[["trivial"]])
+    env = FakeEnvBackend(
+        create_states=[root_state()],
+        step_results=[
+            ExecStepBatchResult(
+                node_id="placeholder",
+                results=[ExecStepResult(tactic="trivial", status="complete")],
+            )
+        ],
+        cleanup_results=[
+            cleanup_response(deferred=["cleanup-open-attempt:search"]),
+            cleanup_response(deferred=["cleanup-open-attempt:search"]),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.search(
+            theorem(),
+            attempt_context=context,
+            policy_client=policy,
+            value_client=None,
+            env_backend=env,
+            config=SearchConfig(
+                algorithm=SearchAlgorithm.PUCT_TREE,
+                max_tactic_calls=1,
+                tactics_per_expansion=1,
+            ),
+        )
+    )
+
+    assert result.status is SearchStatus.PROVED
+    assert result.diagnostics["cleanup_attempts"] == 2
+    assert result.diagnostics["cleanup_max_attempts"] == 2
+    assert result.diagnostics["cleanup_deferred"] == 1
+    assert json.loads(
+        result.diagnostics["cleanup_deferred_item_ids"]
+    ) == ["cleanup-open-attempt:search"]
+
+
 def test_tree_engine_cleans_search_state_on_unexpected_error() -> None:
     class RaisingPolicyClient(FakePolicyClient):
         async def sample_tactics(
@@ -1332,6 +2026,7 @@ def test_tree_engine_cleans_search_state_on_unexpected_error() -> None:
             *,
             n: int,
             params=None,
+            context=None,
         ) -> list[list[str]]:
             raise RuntimeError("policy unavailable")
 
@@ -1489,6 +2184,7 @@ def test_tree_engine_cleanup_failure_does_not_mask_unexpected_error() -> None:
             *,
             n: int,
             params=None,
+            context=None,
         ) -> list[list[str]]:
             raise RuntimeError("policy unavailable")
 
@@ -1598,6 +2294,113 @@ def test_run_search_batch_cancel_calls_cancel_then_cleanup() -> None:
     ]
 
 
+def test_cancelled_tree_search_persists_lifecycle_records(
+    tmp_path,
+) -> None:
+    class CancelFailingBlockingStepEnv(FakeEnvBackend):
+        def __init__(self) -> None:
+            super().__init__(
+                create_states=[root_state()],
+                cleanup_results=[
+                    cleanup_response(
+                        deferred=["cancel-persist-attempt:search"]
+                    ),
+                ],
+            )
+            self.step_started = asyncio.Event()
+
+        async def step(
+            self,
+            node_id: str,
+            state_token: str,
+            tactics: list[str],
+            *,
+            goal_group: tuple[int, ...] | None = None,
+            timeout_ms: int | None = None,
+        ) -> ExecStepBatchResult:
+            self.step_calls.append(
+                (node_id, state_token, list(tactics), goal_group)
+            )
+            self.events.append(("step", node_id))
+            self.step_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        async def cancel(self, item_ids: list[str]) -> ExecCancelResponse:
+            self.cancel_calls.append(item_ids)
+            self.events.append(("cancel", ",".join(item_ids)))
+            raise RuntimeError("cancel backend down")
+
+    async def run_and_cancel(db_path) -> CancelFailingBlockingStepEnv:
+        policy = FakePolicyClient(tactic_batches=[["trivial"]])
+        env = CancelFailingBlockingStepEnv()
+        store = SQLiteReplayStore(db_path)
+        task = asyncio.create_task(
+            run_search_batch(
+                [theorem()],
+                policy_client=policy,
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.PUCT_TREE,
+                    max_tactic_calls=1,
+                    tactics_per_expansion=1,
+                ),
+                max_concurrent=1,
+                attempt_contexts=[
+                    SearchAttemptContext(
+                        attempt_id="cancel-persist-attempt",
+                        search_item_id="cancel-persist-attempt:search",
+                        verify_item_id="cancel-persist-attempt:verify",
+                        cleanup_max_attempts=1,
+                    )
+                ],
+                replay_store=store,
+            )
+        )
+        await env.step_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        store.close()
+        return env
+
+    db_path = tmp_path / "replay.db"
+    env = asyncio.run(run_and_cancel(db_path))
+
+    assert env.cancel_calls == [
+        ["cancel-persist-attempt:search", "cancel-persist-attempt:verify"]
+    ]
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        """
+        SELECT lifecycle_stage, lifecycle_status, backend_item_id, last_error
+        FROM attempt_lifecycle_outbox
+        ORDER BY lifecycle_stage, backend_item_id
+        """
+    ).fetchall()
+    assert rows == [
+        (
+            "cancel",
+            "failed",
+            "cancel-persist-attempt:search",
+            "cancel backend down",
+        ),
+        (
+            "cancel",
+            "failed",
+            "cancel-persist-attempt:verify",
+            "cancel backend down",
+        ),
+        (
+            "cleanup",
+            "deferred",
+            "cancel-persist-attempt:search",
+            None,
+        ),
+    ]
+
+
 def test_direct_search_cancel_cancels_active_verify_item() -> None:
     class BlockingVerifyEnv(FakeEnvBackend):
         def __init__(self) -> None:
@@ -1646,3 +2449,72 @@ def test_direct_search_cancel_cancels_active_verify_item() -> None:
     env = asyncio.run(run_and_cancel())
 
     assert env.cancel_calls == [["direct-cancel:verify:1"]]
+
+
+def test_direct_search_cancel_persists_active_verify_lifecycle(
+    tmp_path,
+) -> None:
+    class BlockingVerifyEnv(FakeEnvBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.verify_started = asyncio.Event()
+
+        async def verify_one(
+            self,
+            item_id: str,
+            code: str,
+            theorem_name: str,
+            *,
+            allowed_axioms: list[str] | None = None,
+            env_profile: str | None = None,
+        ) -> ExecVerifyResult:
+            self.verify_calls.append((item_id, code, theorem_name))
+            self.events.append(("verify", item_id))
+            self.verify_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def run_and_cancel(db_path) -> BlockingVerifyEnv:
+        env = BlockingVerifyEnv()
+        store = SQLiteReplayStore(db_path)
+        task = asyncio.create_task(
+            run_search_batch(
+                [theorem()],
+                policy_client=FakePolicyClient(
+                    proof_batches=[["theorem t : True := by\n  trivial"]]
+                ),
+                value_client=None,
+                env_backend=env,
+                config=SearchConfig(
+                    algorithm=SearchAlgorithm.DIRECT,
+                    max_direct_candidates=1,
+                ),
+                max_concurrent=1,
+                attempt_contexts=[direct_attempt("direct-cancel-replay")],
+                replay_store=store,
+            )
+        )
+        await env.verify_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        store.close()
+        return env
+
+    db_path = tmp_path / "replay.db"
+    env = asyncio.run(run_and_cancel(db_path))
+
+    assert env.cancel_calls == [["direct-cancel-replay:verify:1"]]
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        """
+        SELECT lifecycle_stage, lifecycle_status, backend_item_id, terminal
+        FROM attempt_lifecycle_outbox
+        """
+    ).fetchone()
+    assert row == (
+        "cancel",
+        "drained",
+        "direct-cancel-replay:verify:1",
+        1,
+    )

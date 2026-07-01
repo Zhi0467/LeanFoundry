@@ -49,6 +49,7 @@ class StateNode:
     value_estimate: float | None = None
     visit_count: int = 0
     failure_message: str | None = None
+    is_negation_context: bool = False
 
     @property
     def is_terminal(self) -> bool:
@@ -90,6 +91,13 @@ class ActionNode:
     children: list[StateNode] = field(default_factory=list)
     status: ActionNodeStatus = ActionNodeStatus.OPEN
     failure_message: str | None = None
+    negation_state: FactorizedProofState | None = None
+    negation_rendered_lean: str | None = None
+    negation_theorem_name: str | None = None
+    negation_tried_tactics: set[str] = field(default_factory=set)
+    disproves_parent: bool = False
+    disproof_proved: bool = False
+    negation_attempt_recorded: bool = False
 
     @property
     def is_terminal(self) -> bool:
@@ -159,6 +167,10 @@ class SearchTree:
             depth=parent_action.parent_state.depth + 1,
             focus=focus,
             parent_action=parent_action,
+            is_negation_context=(
+                parent_action.parent_state.is_negation_context
+                or parent_action.disproves_parent
+            ),
         )
         self._next_state_index += 1
         parent_action.children.append(child)
@@ -190,6 +202,10 @@ class SearchTree:
                 depth=parent_action.parent_state.depth + 1,
                 focus=focus,
                 parent_action=parent_action,
+                is_negation_context=(
+                    parent_action.parent_state.is_negation_context
+                    or parent_action.disproves_parent
+                ),
             )
             self._next_state_index += 1
             parent_action.children.append(child)
@@ -256,11 +272,25 @@ class SearchTree:
             self.refresh_from_action(parent_action)
 
     def _refresh_action_status(self, action: ActionNode) -> None:
+        if action.disproof_proved:
+            action.status = ActionNodeStatus.DEAD
+            return
         if action.status is ActionNodeStatus.DEAD:
             return
         if not action.children:
             if action.status is ActionNodeStatus.PROVED:
                 return
+            return
+        if (
+            action.disproves_parent
+            and all(
+                child.status is StateNodeStatus.PROVED
+                for child in action.children
+            )
+        ):
+            action.disproof_proved = True
+            action.status = ActionNodeStatus.DEAD
+            action.failure_message = "negation subtree proved"
             return
         if any(
             child.status is StateNodeStatus.DISPROVED
@@ -276,6 +306,14 @@ class SearchTree:
         action.status = ActionNodeStatus.OPEN
 
     def _refresh_state_status(self, state_node: StateNode) -> None:
+        disproving_action = _state_disproving_action(state_node)
+        if disproving_action is not None:
+            state_node.status = StateNodeStatus.DISPROVED
+            state_node.failure_message = disproving_action.failure_message
+            return
+        if _synthetic_root_has_disproved_child(state_node):
+            state_node.status = StateNodeStatus.DISPROVED
+            return
         if any(
             action.status is ActionNodeStatus.PROVED
             for action in state_node.actions
@@ -286,6 +324,23 @@ class SearchTree:
         if state_node.status is StateNodeStatus.DISPROVED:
             return
         state_node.status = StateNodeStatus.OPEN
+
+
+def _state_disproving_action(state_node: StateNode) -> ActionNode | None:
+    for action in state_node.actions:
+        if action.disproof_proved:
+            return action
+    return None
+
+
+def _synthetic_root_has_disproved_child(state_node: StateNode) -> bool:
+    if state_node.depth != 0 or state_node.open_goal_count != 0:
+        return False
+    return any(
+        child.status is StateNodeStatus.DISPROVED
+        for action in state_node.actions
+        for child in action.children
+    )
 
 
 __all__ = [

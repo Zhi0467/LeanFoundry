@@ -6,11 +6,13 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from leanfoundry.proofsearch._tree import (
+    ActionNode,
     ActionNodeStatus,
     SearchTree,
     StateNode,
     StateNodeStatus,
 )
+from leanfoundry.proofsearch._negation import NEGATION_ACTION_TACTIC
 from leanfoundry.proofsearch._tree_init import (
     SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
 )
@@ -90,13 +92,11 @@ def extract_training_artifacts(
         context,
     )
 
+    policy_examples = _policy_examples_from_runtime_tree(tree, context)
+    if _should_emit_value_labels(context):
+        value_labels = _proved_value_labels_from_runtime_tree(tree, context)
     if tree.root.status is StateNodeStatus.PROVED:
-        policy_examples = _policy_examples_from_runtime_tree(tree, context)
         if _should_emit_value_labels(context):
-            value_labels = _proved_value_labels_from_runtime_tree(
-                tree,
-                context,
-            )
             value_labels.extend(disproved_value_labels)
         if proof_tree is not None and proof_tree.verified:
             proof_candidates.append(proof_tree)
@@ -113,13 +113,23 @@ def extract_training_artifacts(
     elif tree.root.status is StateNodeStatus.DISPROVED:
         value_labels = disproved_value_labels
     else:
-        value_labels = _censored_negative_value_labels(tree, context)
+        if _should_emit_value_labels(context):
+            value_labels.extend(
+                _censored_negative_value_labels(tree, context)
+            )
         value_labels.extend(disproved_value_labels)
 
     diagnostics["proof_candidates"] = len(proof_candidates)
     diagnostics["policy_examples"] = len(policy_examples)
     diagnostics["value_labels"] = len(value_labels)
     diagnostics["extraction_failures"] = len(failures)
+    diagnostics["step_her_multiplier"] = len(policy_examples)
+    diagnostics.update(
+        _path_b_render_diagnostics(
+            tree,
+            proof_tree=proof_tree,
+        )
+    )
     return TrainingArtifacts(
         proof_candidates=proof_candidates,
         policy_examples=policy_examples,
@@ -213,6 +223,67 @@ def _count_proved_alternatives(state_node: StateNode) -> int:
     return count
 
 
+def _path_b_render_diagnostics(
+    tree: SearchTree,
+    *,
+    proof_tree: ProofTree | None,
+) -> dict[str, int]:
+    """Return optional Path-B renderability counters.
+
+    These counters are diagnostic only. Path-A step extraction remains grounded
+    by accepted backend transitions and does not require rendering.
+    """
+
+    proved_actions = list(_iter_path_b_candidate_actions(tree))
+    structurally_renderable = sum(
+        1
+        for action in proved_actions
+        if _action_supported_by_narrow_renderer(action)
+    )
+    top_level_verified = (
+        1 if proof_tree is not None and proof_tree.verified else 0
+    )
+    return {
+        "path_b_render_candidates": len(proved_actions),
+        "path_b_renderable_candidates": structurally_renderable,
+        "path_b_unsupported_candidates": (
+            len(proved_actions) - structurally_renderable
+        ),
+        "path_b_verified_candidates": top_level_verified,
+    }
+
+
+def _iter_path_b_candidate_actions(tree: SearchTree) -> list[ActionNode]:
+    actions: list[ActionNode] = []
+    for state in _iter_real_states(tree):
+        if state.is_negation_context:
+            continue
+        for action in state.actions:
+            if action.status is not ActionNodeStatus.PROVED:
+                continue
+            if action.tactic in {
+                SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
+                NEGATION_ACTION_TACTIC,
+            }:
+                continue
+            actions.append(action)
+    return actions
+
+
+def _action_supported_by_narrow_renderer(action: ActionNode) -> bool:
+    if len(action.children) > 1:
+        for child in action.children:
+            if child.open_goal_count > 1:
+                return False
+    for child in action.children:
+        child_action = child.proved_action()
+        if child_action is None:
+            return False
+        if not _action_supported_by_narrow_renderer(child_action):
+            return False
+    return True
+
+
 def _real_initial_states(tree: SearchTree) -> list[StateNode]:
     initialization_action = tree.root.proved_action()
     if initialization_action is not None:
@@ -253,8 +324,8 @@ def _policy_examples_from_runtime_tree(
     context: ExtractionContext,
 ) -> list[PolicyExample]:
     examples: list[PolicyExample] = []
-    for root in _real_initial_states(tree):
-        examples.extend(_policy_examples_from_state_node(root, context))
+    for state in _iter_real_states(tree):
+        examples.extend(_policy_examples_from_state_node(state, context))
     return examples
 
 
@@ -262,10 +333,7 @@ def _policy_examples_from_state_node(
     state_node: StateNode,
     context: ExtractionContext,
 ) -> list[PolicyExample]:
-    action = state_node.proved_action()
-    if action is None:
-        return []
-    examples = [
+    return [
         PolicyExample(
             state=state_node.state,
             proof_prefix=proof_prefix_for_state(state_node),
@@ -275,41 +343,26 @@ def _policy_examples_from_state_node(
             depth=state_node.depth,
             model_version=context.model_version,
         )
+        for action in state_node.actions
+        if action.status is ActionNodeStatus.PROVED
     ]
-    for child in action.children:
-        examples.extend(_policy_examples_from_state_node(child, context))
-    return examples
 
 
 def _proved_value_labels_from_runtime_tree(
     tree: SearchTree,
     context: ExtractionContext,
 ) -> list[ValueLabel]:
-    labels: list[ValueLabel] = []
-    for root in _real_initial_states(tree):
-        labels.extend(_proved_value_labels_from_state_node(root, context))
-    return labels
-
-
-def _proved_value_labels_from_state_node(
-    state_node: StateNode,
-    context: ExtractionContext,
-) -> list[ValueLabel]:
-    action = state_node.proved_action()
-    if action is None:
-        return []
-    labels = [
+    return [
         _value_label(
-            state_node,
+            state,
             context,
             label=1,
             weight=1.0,
             disproved=False,
         )
+        for state in _iter_real_states(tree)
+        if state.status is StateNodeStatus.PROVED
     ]
-    for child in action.children:
-        labels.extend(_proved_value_labels_from_state_node(child, context))
-    return labels
 
 
 def _disproved_value_labels_from_runtime_tree(
@@ -337,7 +390,10 @@ def proof_prefix_for_state(state_node: StateNode) -> str:
     tactics: list[str] = []
     action = state_node.parent_action
     while action is not None:
-        if action.tactic != SYNTHETIC_INITIALIZATION_ACTION_TACTIC:
+        if action.tactic not in {
+            SYNTHETIC_INITIALIZATION_ACTION_TACTIC,
+            NEGATION_ACTION_TACTIC,
+        }:
             tactics.append(action.tactic)
         action = action.parent_state.parent_action
     return "\n".join(reversed(tactics))

@@ -67,6 +67,73 @@ CREATE TABLE trajectories (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Backend cleanup/cancel lifecycle records that need audit or later
+-- reconciliation. terminal = FALSE rows form the retry outbox.
+CREATE TABLE attempt_lifecycle_outbox (
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
+  env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
+  attempt_id TEXT NOT NULL CHECK (length(attempt_id) >= 1),
+  backend_item_id TEXT NOT NULL CHECK (length(backend_item_id) >= 1),
+  lifecycle_stage TEXT NOT NULL CHECK (
+    lifecycle_stage IN ('cleanup', 'cancel')
+  ),
+  lifecycle_status TEXT NOT NULL CHECK (length(lifecycle_status) >= 1),
+  retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+  max_retries INTEGER CHECK (max_retries IS NULL OR max_retries >= 0),
+  last_error TEXT,
+  next_retry_at TIMESTAMP,
+  terminal BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX attempt_lifecycle_outbox_attempt_idx
+ON attempt_lifecycle_outbox(attempt_id);
+
+CREATE INDEX attempt_lifecycle_outbox_retry_idx
+ON attempt_lifecycle_outbox(terminal, next_retry_at);
+
+-- Extraction/rendering failures that explain why an attempted artifact was not
+-- emitted as training data.
+CREATE TABLE extraction_failures (
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
+  env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
+  attempt_id TEXT,
+  failure_kind TEXT NOT NULL CHECK (
+    failure_kind IN ('rendering', 'verification', 'unsupported')
+  ),
+  message TEXT NOT NULL CHECK (length(message) >= 1),
+  node_id TEXT,
+  model_version INTEGER,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX extraction_failures_attempt_idx
+ON extraction_failures(attempt_id);
+
+-- Synthetic negation proof attempts that justify DISPROVED value labels.
+CREATE TABLE negation_attempts (
+  id TEXT PRIMARY KEY NOT NULL,
+  theorem_id TEXT NOT NULL REFERENCES theorems(id),
+  env_profile TEXT NOT NULL CHECK (length(env_profile) >= 1),
+  attempt_id TEXT,
+  source_node_id TEXT NOT NULL CHECK (length(source_node_id) >= 1),
+  negated_target TEXT NOT NULL CHECK (length(negated_target) >= 1),
+  status TEXT NOT NULL CHECK (length(status) >= 1),
+  proved BOOLEAN NOT NULL,
+  proved_tactic TEXT,
+  tactic_calls_used INTEGER NOT NULL CHECK (tactic_calls_used >= 0),
+  rendered_lean TEXT,
+  payload_json TEXT NOT NULL CHECK (length(payload_json) >= 1),
+  model_version INTEGER,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX negation_attempts_attempt_idx
+ON negation_attempts(attempt_id);
+
 -- Positive per-state tactic examples extracted from accepted search steps.
 CREATE TABLE policy_examples (
   id TEXT PRIMARY KEY NOT NULL,
@@ -111,6 +178,7 @@ CREATE TABLE formal_statements_staging (
   informal_statement TEXT,
   lean_statement TEXT NOT NULL,
   env_profile TEXT NOT NULL,
+  header TEXT NOT NULL DEFAULT '',
   formalizer_version TEXT,
   semantic_judge_score REAL CHECK (
     semantic_judge_score IS NULL

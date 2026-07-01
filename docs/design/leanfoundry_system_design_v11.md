@@ -1,6 +1,675 @@
 # LeanFoundry
 ## Full System Design — v11
 
+> **v11.77 (2026-06-30):** Backend validation reports now carry live-run
+> latency diagnostics. `BackendValidationReport` records create, replay-step
+> aggregate, verify, and total elapsed seconds, and
+> `leanfoundry-validate-backend` includes aggregate latency totals/means in its
+> JSON summary. This makes the validation CLI usable for backend latency
+> sweeps; real LeanDojo/LeanTree trajectory material, cache-hit interpretation,
+> state-token-size telemetry, and production backend profiling remain live
+> environment work.
+
+> **v11.76 (2026-06-30):** Extension B now has a concrete formalizer
+> service/prompt contract. `HTTPFormalizer` implements the existing injected
+> `Formalizer` protocol over a JSON endpoint, `formalizer_payload(...)`
+> carries staging id, informal statement, env profile, header, attempt index,
+> verifier feedback, and a default prompt, and
+> `parse_formalizer_response(...)` requires a structured non-empty
+> `lean_statement`. The draft/retry loop is still model-agnostic and injected;
+> this is a service boundary and prompt policy, not a deployed formalizer
+> checkpoint, model calibration, or live corpus result.
+
+> **v11.75 (2026-06-30):** Eval loading now has a second built-in
+> public-benchmark row adapter and the named MathOlympiadBench eval target has
+> a concrete adapter too. `PUTNAMBENCH_LEAN4_ROW_FORMAT` /
+> `putnambench_lean4_jsonl` adapts the public PutnamBench Lean 4 JSONL mirror's
+> `problem_name`, `formal_statement`, optional `informal_statement`, and
+> `split` fields into `TheoremSpec`s. Because that mirror has no per-row Lean
+> header, the loader requires an `EnvProfile` registry entry for the manifest's
+> `env_profile` and uses that registered header.
+> `MATHOLYMPIADBENCH_LEAN4_ROW_FORMAT` /
+> `matholympiadbench_lean4_jsonl` adapts MathOlympiadBench `name` or
+> `problem_id`, `formal_statement`, `header`, optional `informal_prefix`, and
+> `split` rows. `PROOFNET_LEAN4_ROW_FORMAT` / `proofnet_lean4_jsonl` adapts
+> ProofNet rows with `name`, `formal_statement`, `header`, optional
+> `informal_prefix`, and `split`; it is intentionally a theorem-initialization
+> transform that only accepts statements ending at `:=` and fills that exact
+> placeholder with `by sorry`. Split mismatches fail closed. These adapters
+> preserve full Lean blocks, including helper declarations before the theorem,
+> without changing the core theorem schema.
+
+> **v11.74 (2026-06-30):** Extension C promoted TTT traces now have a durable
+> replay surface. `TTTTraceReplayRecord` stores the promoted
+> `TTTSessionTrace`, the `TTTTracePromotionDecision`, the stable `trace_key`,
+> env profile, checkpoint, final status, adapter id, round count, and model
+> version; SQLite schema v8 persists these rows in `ttt_trace_replay`.
+> `persist_promoted_ttt_trace(...)` is the explicit caller-owned write path.
+> This admits trace artifacts only; it does not turn TTT traces into A-type
+> proofs, policy examples, or value labels. Concrete trainer fine-tuning/reload
+> and a selected per-problem search source remain downstream/future work.
+
+> **v11.73 (2026-06-30):** Eval loading now includes the first built-in
+> public-benchmark row adapter. `MINIF2F_LEAN4_ROW_FORMAT` /
+> `minif2f_lean4_jsonl` adapts MiniF2F Lean 4 JSONL rows with `id` or `name`,
+> `split`, `formal_statement`, `header`, and optional `informal_stmt` into
+> `TheoremSpec`s using the manifest-owned `env_profile`; manifest split
+> mismatches fail closed. Callers can still override the adapter for a different
+> MiniF2F variant. Other public benchmark adapters remain future work until
+> their row formats and env-profile compatibility are selected.
+
+> **v11.72 (2026-06-30):** The lean-client boundary now has an explicit
+> adapter pass-through regression. `tests/test_env_backend.py` verifies that
+> `KiminaEnvBackend` forwards `limits`, `create_states`, `step`, `verify_one`,
+> `verify`, `cleanup`, `cancel`, `stats`, and `close` to the pinned
+> `AsyncLeanExecBackend` façade shape, including `goal_group` tuple-to-list
+> conversion. This strengthens the local client-boundary evidence; backend
+> server internals, state-store behavior, cache/latency, and kernel cancellation
+> guarantees still require live backend/server-side validation.
+
+> **v11.71 (2026-06-30):** System-landscape claims were refreshed against
+> primary source pages for the core referenced prover/tooling systems. The
+> landscape now includes OProver and Pythagoras-Prover as 2026 open whole-proof
+> / agentic baselines. This refresh supports the boundary claim that
+> LeanFoundry is infrastructure for controlled search/training experiments, not
+> a claim to invent state-tactic data or to be the latest prover checkpoint.
+> External benchmark and open/closed-source claims remain background context and
+> should be refreshed again before publication.
+
+> **v11.70 (2026-06-30):** Literature/novelty framing is tightened around the
+> training-data question. HTPS, LeanDojo/ReProver, and BFS-Prover-style systems
+> already use proof-state/tactic step data or search-distilled step-prover
+> training; LeanFoundry's step-level Path-A data is therefore prior-art-aligned,
+> not a novel data shape and not a lazy fallback for tree rendering. The
+> downstream training-repo question is the controlled comparison: under fixed
+> curriculum, verifier budget, env profile, and evals, do lineage-A step rows,
+> lineage-B whole-proof rows, self-correction rows, or mixtures produce the
+> best prover in native and crossed evaluation?
+
+> **v11.69 (2026-06-30):** Extension B now has an
+> embedding-similarity dedup service contract and optional promotion gate.
+> `HTTPEmbeddingDeduplicator` posts staging rows and a similarity threshold to
+> a JSON endpoint, `parse_embedding_dedup_response(...)` validates duplicate
+> flags and scores against the threshold, and
+> `PromotionGateConfig(require_embedding_unique=True)` lets promotion reject
+> missing, errored, or duplicate embedding-dedup results. This is an
+> integration contract and gate only; real embedding models, vector indexes,
+> corpus calibration, service deployment, and live staged-corpus runs remain
+> external/future work.
+
+> **v11.68 (2026-06-30):** Extension C TTT trace promotion now has a local
+> decision gate. `evaluate_ttt_trace_promotion(...)` requires config opt-in by
+> default, checks env-profile and trace-key dedup inputs, rejects failed stages,
+> and by default promotes only solved sessions with a successfully reloaded
+> adapter. It returns a trace marked `promoted_to_main_replay=True` when the
+> gate passes. Concrete trainer/reload execution and MCGS/per-problem search
+> sources remain external/future work.
+
+> **v11.67 (2026-06-30):** Extension D local budget metering now has a script
+> entrypoint. `leanfoundry-budget-meter` initializes SQLite meter cells from a
+> JSON ledger or plan-shaped object, atomically reserves usage, prints cell
+> snapshots, and returns nonzero when a reservation is refused. This is an
+> operator/script hook over `SQLiteBudgetMeterStore`, not a distributed
+> metering service, trainer integration, or worker-side measurement pipeline.
+
+> **v11.66 (2026-06-30):** Extension D budget enforcement now has a local
+> durable SQLite meter. `SQLiteBudgetMeterStore` initializes plan ledger cells,
+> validates existing cell drift, and uses `BEGIN IMMEDIATE` transactions to
+> atomically reserve metered usage through `check_budget_request(...)`. This
+> closes the single-process/local-file durable counter gap. Distributed
+> metering services, trainer integration, live worker-side measurements, and
+> multi-node database deployment remain training/deployment work.
+
+> **v11.65 (2026-06-30):** Extension A router cancellation now has local
+> protocol semantics. `RouterCommand.CANCEL` lets `AsyncRouterService` cancel
+> an in-flight backend assignment after the client disconnects;
+> `cancel_inflight_requests(...)` frees the scheduler slot and drains queued
+> work; `RouterBackendWorker` cancels the local task for that router request.
+> Late backend responses for already-cancelled work are dropped. This is local
+> router/worker cancellation, not a guarantee that every concrete Lean backend
+> operation can abort kernel execution instantly.
+
+> **v11.64 (2026-06-30):** Extension A state portability now has a read-only
+> HTTP(S) URI fetch path. `decode_http_state_ref(...)` and
+> `decode_uri_state_ref(...)` read `PortableStateRef(location=URI)` payloads
+> from `http://`, `https://`, or existing `file://` references, enforce exact
+> payload size, decode the configured codec, and verify the decoded state hash.
+> This supports common object-store public/signed-URL reads; credentialed
+> object-store clients, remote writes, lifecycle policy, and state
+> export/import from the Lean backend remain deployment/backend work.
+
+> **v11.63 (2026-06-30):** Extension A reference router diagnostics now have
+> optional HTTP health and metrics endpoints. `leanfoundry.scaleout.health`
+> derives `/healthz`, `/readyz`, and `/metrics` responses from
+> `RouterServiceSnapshot`; `leanfoundry-router` can serve them with
+> `--health-port`. This is a local supervisor hook and Prometheus-text export,
+> not a production deployment, restart policy, TLS/auth layer, pager
+> integration, or cluster autoscaler integration.
+
+> **v11.62 (2026-06-30):** Extension B now has local formalization
+> draft/retry orchestration. `run_formalization_draft_loop(...)` takes an
+> injected `Formalizer` and `StatementVerifier`, checks each generated Lean
+> statement with the staging statement-check wrapper, passes verifier feedback
+> into the next attempt, and returns an accepted staging row only when syntax
+> checking passes. The concrete HTTP formalizer service/prompt boundary landed
+> later in v11.76; deployment, real model calibration, embedding-similarity
+> dedup service, real judge calibration, and live staged-corpus evaluation were
+> still future/external at this slice.
+
+> **v11.61 (2026-06-30):** Extension B now has a semantic-judge service
+> contract. `HTTPSemanticJudge` posts staged informal/formal statement pairs to
+> a JSON endpoint, `parse_semantic_judge_response(...)` validates a score in
+> `[0, 1]`, and `staging_record_with_semantic_judge_result(...)` populates the
+> staging row's `semantic_judge_score`. Promotion remains the layer that
+> applies the threshold. A real judge model, calibration corpus, service
+> deployment, and human-quality evaluation remain future/external work.
+
+> **v11.60 (2026-06-30):** Extension B now has a local statement-check wrapper.
+> `verify_staging_statement_code(...)` builds the Lean snippet used to check a
+> staged theorem statement with a `sorry` body, `KiminaStatementVerifier` calls
+> lean-client's legacy REPL `api_check` route, and
+> `staging_record_with_syntax_result(...)` updates the staging row's
+> `syntax_checked` gate field from the normalized result. This is syntax/type
+> checking only; it does not run an LLM draft/retry loop, semantic judge,
+> embedding dedup service, or live statement-check corpus.
+
+> **v11.59 (2026-06-30):** Extension A reference router hardening now has
+> local health diagnostics and pending-client cleanup. `RouterServiceSnapshot`
+> exposes backend-slot, queue, client-request, stored-frame, assignment,
+> delivery, requeue, and dropped-pending counters from `AsyncRouterService`.
+> Client disconnects now drop requests that are still pending and leave already
+> forwarded backend work to finish and be discarded, because the reference
+> router has no backend cancellation protocol yet. This is not a production
+> health endpoint or metrics exporter; supervisors still need site-specific
+> probing, alerting, restart policy, and backend cancellation semantics.
+
+> **v11.58 (2026-06-30):** Extension A reference router processes now have
+> console entrypoints. `leanfoundry-router` starts `AsyncRouterService`, and
+> `leanfoundry-router-worker` builds `RouterBackendWorker` around the normal
+> `make_env_backend(EnvBackendConfig(...))` composition root. This gives
+> systemd/Slurm/Kubernetes or local scripts stable process commands without
+> making LeanFoundry own site-specific supervision, health checks, restart
+> policy, metrics export, or autoscaler wiring.
+
+> **v11.57 (2026-06-30):** Extension A ZSTD state payloads now have an
+> explicit optional dependency contract. The `[scaleout]` extra installs
+> `zstandard`, default installs still fail closed with a clear runtime error
+> when `StateSnapshotCodec.ZSTD` is requested, and focused tests cover both the
+> absent-extra path and real ZSTD inline/file state-ref round-trips under
+> `uv run --extra scaleout`. Deployment still must decide whether workers and
+> routers install this extra consistently.
+
+> **v11.56 (2026-06-30):** Extension A now has a router-backed EnvBackend
+> adapter baseline. `RouterEnvBackend` sends lean-client `/exec` operations as
+> JSON payloads inside router `REQUEST` frames, and `RouterBackendWorker` wraps
+> an injected `EnvBackend`, executes those operations, and returns typed
+> responses through router `RESPONSE`/`DELIVER` frames. Covered operations are
+> limits, create_states, step_batch through the one-state `EnvBackend.step(...)`
+> hot path, verify, cleanup, cancel, and stats. This keeps the router service
+> payload-opaque while giving search/eval code a real `EnvBackend` client for a
+> reference router deployment. Lean state export/import, remote payload
+> transport, production process supervision, distributed replay, and cluster
+> deployment remain future/deployment work.
+
+> **v11.55 (2026-06-30):** Extension A URI state payloads now have local
+> `file://` helpers. `make_file_state_ref(...)` writes encoded state bytes to a
+> file URI and returns a `PortableStateRef(location=URI)`, while
+> `decode_file_state_ref(...)` reads and validates payload size, decoded
+> SHA-256, and raw size before returning state bytes. This does not implement
+> remote/object-store URI adapters, Lean backend state export/import, or router
+> payload transfer; it only makes local URI references executable and
+> integrity-checked.
+
+> **v11.54 (2026-06-30):** Extension A now has a reference asyncio TCP router
+> service over the binary frame codec. `AsyncRouterService` accepts backend
+> `REGISTER` connections, client `REQUEST` frames, forwards opaque payloads as
+> `FORWARD`, delivers backend `RESPONSE` payloads as `DELIVER`, and requeues
+> in-flight requests when a backend connection drops. Backend registration uses
+> a small JSON payload (`RouterBackendRegistration`) inside the binary frame.
+> This is a local correctness harness, not the production C++/deployment router:
+> superseded in part by v11.56, which adds a router-backed EnvBackend adapter.
+> State export/import, remote URI payload transfer, distributed replay,
+> connection hardening, metrics, and autoscaler integration remain
+> future/deployment work.
+
+> **v11.53 (2026-06-30):** Extension A router framing now has a local binary
+> codec. `RouterCommand`, `RouterFrame`, `encode_router_frame(...)`, and
+> `decode_router_frame(...)` implement the documented
+> `uint64 request_id | uint8 command | uint16 response_count | uint32 payload`
+> frame in network byte order with strict exact-frame decoding. Command
+> payloads remain opaque bytes at this layer. Superseded in part by v11.54,
+> which adds a reference asyncio TCP service over this codec, and v11.56, which
+> adds `/exec` adapter payloads; state export/import and distributed replay
+> remain future/deployment work.
+
+> **v11.52 (2026-06-30):** Extension A router semantics now have a local pure
+> scheduler baseline. `RouterState` plus `register_backend(...)`,
+> `enqueue_request(...)`, `complete_request(...)`, and
+> `disconnect_backend(...)` implement deterministic FIFO assignment to idle
+> backend CPU slots, completion-driven queue draining, duplicate-id rejection,
+> and disconnect requeue for in-flight requests. This is not the TCP REPL
+> router service, backend adapter, state export/import path, distributed replay
+> store, or deployment autoscaler; it only makes the core routing state
+> transition rules executable and testable.
+
+> **v11.51 (2026-06-30):** Extension A state portability now has local
+> byte-level helpers. `make_inline_state_ref(...)` builds an inline
+> `PortableStateRef` from state bytes, and `decode_inline_state_ref(...)`
+> decodes and validates inline payloads against SHA-256 and raw-size metadata.
+> RAW inline payloads are supported in core; ZSTD remains optional and requires
+> an installed `zstandard` runtime. Superseded in part by v11.57, which adds
+> the `[scaleout]` extra for that runtime, and v11.55, which adds local
+> `file://` URI helpers. Backend state export/import, router service/adapter
+> work, and distributed replay remain future/deployment work.
+
+> **v11.50 (2026-06-30):** Extension B now has local staging metadata helpers.
+> `formal_statement_dedup_hash(...)` / `staging_record_with_dedup_hash(...)`
+> provide exact normalized statement/header/env-profile dedup hashes, and
+> `estimate_difficulty_from_quick_search(...)` maps a quick search
+> `SearchResult` into the numeric `difficulty_estimate` used by
+> `TheoremRecord`. These helpers do not replace semantic LLM judging,
+> embedding-similarity dedup, LLM draft/retry, or statement verifier services.
+
+> **v11.49 (2026-06-30):** Extension C now has a generic local TTT
+> orchestrator. `run_ttt_session(...)` alternates injected search, sample
+> extraction, `TTTAdapter.fine_tune(...)`, adapter reload, and
+> `AdaptablePolicyClient.with_adapter(...)`, producing `TTTSessionTrace`
+> artifacts for success, insufficient-sample stops, training failures, and
+> reload failures. MCGS or another selected per-problem search source and
+> concrete LoRA optimization/reload remain external/future work. Superseded in
+> part by v11.68, which adds the local trace-promotion decision gate.
+
+> **v11.48 (2026-06-30):** Extension D budget enforcement now has a local
+> request guard. `check_budget_request(...)` evaluates one metered request
+> against a `BudgetLedgerEntry` cell, verifies the request's
+> `budget_account_id`, refuses hard-cap overruns, and returns remaining-budget
+> diagnostics. Durable usage accounting, concurrency control, and service
+> integration remain deployment work; the core helper only makes the hard-cap
+> rule executable and testable.
+
+> **v11.47 (2026-06-30):** Extension D frozen-curriculum construction now has
+> a deterministic local helper. `build_frozen_curriculum_from_pass_sweep(...)`
+> consumes aligned theorem/search-result pairs from one direct whole-proof
+> pass@N sweep, requires complete verifier-attempt evidence for candidates
+> `1..N`, computes per-theorem accepted-candidate rates, assigns difficulty
+> buckets, and rank-splits the fixed pool into training rounds. Running the
+> sweep on a real model, optimizer execution, checkpoint production, and live
+> budget-meter enforcement remain training/deployment work.
+
+> **v11.46 (2026-06-30):** The `/exec` validation harness now has an operator
+> entry point. `leanfoundry-validate-backend` /
+> `python -m leanfoundry.env_backend.validation_cli` loads
+> `BackendValidationCase` JSON or JSONL, enforces one coherent `env_profile`
+> per validation run, connects to a live `EnvBackend`, emits JSON report
+> summaries, and exits nonzero on replay or final-verification failures. Real
+> LeanDojo/LeanTree case material and cache/latency measurement remain
+> deployment/data validation work.
+
+> **v11.45 (2026-06-30):** Extension A now has minimal scale-out contracts.
+> `leanfoundry.scaleout` records future router metrics, the queue-depth
+> autoscaling decision formula, and portable state snapshot references with
+> codec/location/hash/size invariants. This does not implement the REPL router,
+> backend state export/import, Postgres/Redis replay, or deployment autoscaler;
+> it gives those future components typed inputs and outputs without changing the
+> single-machine core.
+
+> **v11.44 (2026-06-30):** Extension B now has a minimal promotion contract.
+> Autoformalization staging records preserve the Lean header/import block needed
+> to become `TheoremRecord`s, with SQLite schema version 7 adding `header` to
+> legacy staging rows. `leanfoundry.formalization.evaluate_promotion(...)`
+> converts a syntax-checked, semantically judged, deduped staging row into a
+> B-type theorem record, or returns machine-readable rejection reasons. LLM
+> drafting, verifier-wrapper retries, semantic judging, embedding dedup, and
+> difficulty estimation remain future pipeline work.
+
+> **v11.43 (2026-06-30):** Extension C / TTT now has a local contract baseline.
+> `leanfoundry.ttt` exposes framework-neutral `TTTAdapter` and
+> `AdaptablePolicyClient` protocols, while `leanfoundry.schemas.ttt` records
+> `TTTConfig`, adapter fine-tune requests/results, and per-round/session traces.
+> The contract keeps optimizer execution and concrete SGLang/LoRA reload in the
+> downstream training repo, keeps trace promotion out of the main replay buffer
+> by default, and did not yet claim a runnable loop. Superseded in part by
+> v11.49, which adds callback-driven local orchestration; MCGS and real adapter
+> reload implementations remain future work.
+
+> **v11.42 (2026-06-30):** Extension D now has a local ablation contract, not a
+> trainer. `AblationExperimentPlan` records the frozen curriculum, the five
+> standard arms (W, W+SC, T-step, T-noval, Mix), per-arm replay/checkpoint
+> namespaces, hard generation/training/verifier ledgers, and crossed-eval cells.
+> Helpers in `leanfoundry.evals.experiment_plan` materialize the default arms,
+> ledgers, and native eval matrix. No-value tree arms are schema-guarded from
+> value serving and value metrics. Actual optimizer execution, checkpoint
+> production, and live budget-meter enforcement remain training/deployment work.
+
+> **v11.41 (2026-06-30):** Plain `DIRECT` whole-proof search now uses the
+> backend's batch verifier surface. The engine builds one `ExecVerifyItem` per
+> sampled candidate, submits the pass@k pool through `EnvBackend.verify(...)`,
+> preserves one `DirectVerificationAttempt` per candidate, and keeps pass@k
+> semantics ordered by candidate index. `SELF_CORRECT` stays sequential because
+> each next prompt depends on the previous verifier feedback.
+
+> **v11.40 (2026-06-30):** Optional Path-B render accounting now has
+> diagnostics without changing the training-data gate. `extract_training_artifacts(...)`
+> records `path_b_render_candidates`, `path_b_renderable_candidates`,
+> `path_b_unsupported_candidates`, and `path_b_verified_candidates` over proved
+> action subtrees. These are action-level counters for the existing narrow
+> renderer and top-level verification artifact; they do not emit extra training
+> rows or attempt arbitrary standalone subproof verification.
+
+> **v11.39 (2026-06-30):** The `/exec` validation harness now has a reusable
+> code surface. `leanfoundry.env_backend.validation.validate_backend_case(...)`
+> replays tree-shaped known tactic trajectories through an injected
+> `EnvBackend`, carries LeanFoundry's goal-coupling split into focused
+> `goal_group` child replays, and verifies the supplied complete proof through
+> `/exec/verify`. This closes the local harness API gap; running it over real
+> LeanDojo/LeanTree trajectories against a live backend remains deployment/data
+> validation work.
+
+> **v11.38 (2026-06-30):** Current-vs-future boundaries are reconciled in the
+> long-form design text. The core implementation is direct whole-proof search,
+> self-correction, AND/OR tree search with PUCT or best-first selection,
+> step-level Path-A extraction, eval artifacts, replay persistence, optional
+> Slime rollout integration, value-client serving, and conservative synthetic
+> negation. Graph/MCGS, tactic beam, optimistic/RMaxTS, arbitrary Path-B proof
+> rendering, Extension A scale-out, Extension B formalization, Extension C TTT,
+> and Extension D ablation infrastructure remain explicit future/deferred work.
+> `lean_client.exec_models` is the shared wire schema and may be imported by
+> protocol-facing modules; only `kimina_backend.py` constructs the concrete
+> `AsyncLeanExecBackend` client.
+
+> **v11.37 (2026-06-30):** Benchmark loading now supports manifest-owned
+> sources beyond explicit local paths. `load_benchmark_source(...)` reads
+> `BenchmarkManifest.source`, validates compatibility/profile/count as before,
+> and supports local paths, `file://` URIs, HTTP(S) JSONL, and explicit
+> Hugging Face file URIs of the form `hf://repo` or `hf://org/repo` with
+> `?path=...` plus optional `revision=...` (falling back to
+> `benchmark_commit` or `main`). `BenchmarkManifest.row_format` records the
+> source row contract: the default is serialized `TheoremSpec` JSONL, while
+> non-default formats require a registered or built-in `BenchmarkRowAdapter` at
+> load time. `minif2f_lean4_jsonl` is the first built-in public-benchmark row
+> format. This keeps benchmark-specific schema transforms out of the core
+> schema while making remote/public dataset loading a typed extension point.
+
+> **v11.36 (2026-06-30):** Failed self-correct attempts can now be emitted as
+> optional reward-0 training rows without changing the default core data
+> contract. `to_training_rows(...,
+> include_failed_self_correct_negatives=True)` emits `kind="self_correct"`
+> rows for rejected turns with metadata
+> `self_correct_objective="failed_negative"`, while accepted corrections remain
+> reward-1 rows. The Slime rollout path exposes this through
+> `lf_include_failed_self_correct_negatives`; the default remains off.
+
+> **v11.35 (2026-06-30):** Attempt-lifecycle reconciliation now has an
+> operator-facing command. `leanfoundry-reconcile-lifecycle` (or
+> `python -m leanfoundry.replay.lifecycle_cli`) opens a SQLite replay DB,
+> connects to the configured Lean backend, runs one or more reconciliation
+> passes through `reconcile_attempt_lifecycle_periodically(...)`, prints JSON
+> diagnostics, emits alert JSON for warning/critical lifecycle outcomes, and
+> can return nonzero for cron/systemd alerting. This is deployment wiring for
+> running the existing cleanup/cancel outbox; pager/metrics integration remains
+> site-specific.
+
+> **v11.34 (2026-06-30):** Slime live-stack validation now has an opt-in smoke
+> harness in `tests/test_slime_live.py`. With `[training]` installed and
+> `LEANFOUNDRY_SLIME_E2E=1`, it drives the real
+> `leanfoundry.slime.async_generate_rollout` path through the pinned Slime
+> package, a live SGLang router, a live Kimina Lean backend, and the configured
+> tokenizer checkpoint for one direct whole-proof theorem. The generated proof
+> may be rejected by Lean; the smoke is a plumbing check, not a model-quality
+> check. Default test runs skip it, and actually executing it remains
+> deployment-environment work.
+
+> **v11.33 (2026-06-30):** Direct whole-proof search now treats
+> `max_direct_candidates` as the full `DIRECT` pass@k pool. It samples one pool,
+> verifies every returned candidate, records every `DirectVerificationAttempt`,
+> returns the first accepted proof as `SearchResult.proof_tree`, and stores
+> every accepted verified proof in `TrainingArtifacts.proof_candidates`.
+> `SELF_CORRECT` still stops when a correction is accepted because later
+> generations would belong to future feedback rounds. Eval pass@k is computed
+> from accepted verifier candidate indices, not from total verifier attempts.
+> Superseded in part by v11.41, which changed the plain `DIRECT` verifier
+> transport from a sequential `verify_one` loop to `EnvBackend.verify(...)`.
+
+> **v11.32 (2026-06-30):** Nested negation proof search now uses the normal
+> AND/OR tree. The synthetic negation action attaches the backend-created
+> negated-theorem proof state as its child; tactics inside that proof are
+> searched like ordinary actions, and open subgoals continue as ordinary child
+> states. When that child subtree is proved, the synthetic action marks the
+> original source state `DISPROVED`, emits a durable `NegationAttempt`, and
+> policy positives are extracted for the synthetic negation proof states rather
+> than the original false state.
+
+> **v11.31 (2026-06-30):** Durable schema release governance is now explicit in
+> [`schema_release_governance.md`](schema_release_governance.md). Released
+> migrations are immutable, new durable changes append numbered migrations,
+> Pydantic models remain the source of truth, supported released versions need
+> upgrade tests, and destructive changes require preservation or an explicit
+> export/import path. This closes the release-policy residual left after the
+> ordered SQLite migration registry landed in v11.28.
+
+> **v11.30 (2026-06-30):** Negation is no longer a one-shot check. The tree
+> search now initializes a synthetic childless OR action for eligible states,
+> stores the rendered negated theorem/backend negation state on that action,
+> and lets normal selection revisit the action for additional tactic batches.
+> Failed negation tactics leave the action open; repeated policy outputs fail
+> closed instead of looping; a completed negation tactic marks the source state
+> `DISPROVED` and emits durable attempt artifacts for each retry. Superseded in
+> part by v11.32, which attaches and searches the synthetic negation proof state
+> as a normal child subtree.
+
+> **v11.29 (2026-06-30):** Synthetic negation rendering now accepts typed local
+> definitions by abstracting each `let`/local definition as a normal typed
+> parameter in the generated theorem. This asks Lean to prove a stronger
+> statement than the original state-under-definition, so a successful negation
+> check remains sound. Entries with missing names, invalid binder identifiers,
+> or empty types still fail closed. This closes the common local-definition
+> rendering gap for the one-shot baseline; full Aristotle-style persistent
+> negation sub-search remains future work.
+
+> **v11.28 (2026-06-30):** SQLite replay migrations now use an ordered
+> migration registry instead of a hand-written ladder. New migrations append to
+> the registry and bump `SCHEMA_VERSION`; legacy v4/v5 upgrade coverage proves
+> current DBs reach the v6 schema with extraction-failure and negation-attempt
+> tables. Superseded in part by v11.44, which bumps the current schema to v7
+> with the formal-staging header migration, and later by v11.74, which bumps
+> the current schema to v8 with promoted TTT trace replay. The remaining
+> compatibility question is release governance for future stable schemas, not
+> the mechanics of applying known migrations.
+
+> **v11.27 (2026-06-30):** Synthetic negation checks now produce durable
+> proof-attempt artifacts. `TrainingArtifacts.negation_attempts` stores a
+> `NegationAttempt` for each concrete check: source state/node, negated target,
+> rendered synthetic theorem, backend negation state, tactic statuses/messages,
+> charged tactic calls, proved flag, proved tactic, and operational status. The
+> replay store persists these in `negation_attempts` with deterministic ids.
+> These artifacts justify/audit `DISPROVED` value labels; they are not policy
+> positives for the original goal. Full Aristotle-style persistent negation
+> sub-search and richer local-context rendering remain future work.
+
+> **v11.26 (2026-06-30):** Extraction failures are now durable replay
+> artifacts. `ExtractionFailureRecord` and the `extraction_failures` SQLite
+> table persist `TrainingArtifacts.failures` with theorem/env/attempt/model
+> provenance, deterministic ids, failure kind, message, and optional node id.
+> Replay diagnostics now include `replay_extraction_failures`. Eval remains
+> file-backed with content hashes; the SQLite replay spine owns online/offline
+> training artifacts and failure audit rows.
+
+> **v11.25 (2026-06-30):** Env-profile manifests are now wired into eval
+> ingress. `load_benchmark_jsonl(...)`,
+> `validate_benchmark_theorems(...)`, and `FixedModelEvalRunner.run(...)`
+> accept an optional `EnvProfile` registry and validate theorem headers against
+> the pinned profile metadata before running eval. The Slime training backend
+> builder now requires an explicit non-default `lean_env_profile` or
+> `env_profile`; low-level `EnvBackendConfig` keeps its `"default"` value as a
+> direct dev/test transport convenience, not as a training ingress default.
+
+> **v11.24 (2026-06-30):** Lifecycle reconciliation now has a scheduler/alert
+> baseline. `reconcile_attempt_lifecycle_periodically(...)` runs bounded or
+> infinite reconciliation passes over the replay outbox, sleeps between passes,
+> aggregates diagnostics, and can call an operator alert sink. Failed backend
+> rows emit warning alerts; orphaned cleanup rows emit critical alerts.
+> Deployment-specific wiring to cron, supervisors, metrics, or paging remains
+> outside core LeanFoundry.
+
+> **v11.23 (2026-06-30):** Direct and self-correct whole-proof search now
+> preserve all verifier attempts as eval provenance. `TrainingArtifacts` has
+> `direct_verification_attempts`, a list of `DirectVerificationAttempt`
+> records with candidate index, proof text, verifier status/feedback,
+> `verify_item_id`, and accepted flag. This is not a training-row source:
+> `to_training_rows(...)` still emits whole-proof rows only for verified
+> `ProofTree` candidates and self-correct rows only for accepted corrections.
+> Eval manifests count recorded direct verifier attempts, and
+> `results.jsonl` contains the per-candidate trace.
+
+> **v11.22 (2026-06-30):** `SELF_CORRECT` now persists a neutral trace artifact
+> for accepted corrections. `SelfCorrectTrace` contains ordered
+> `SelfCorrectTurn`s with proof text, verifier status, rendered verifier
+> feedback, verifier item id, and accepted flag. `to_training_rows(...)` emits
+> `kind="self_correct"` rows when a later turn is accepted: the prompt contains
+> the theorem, previous failed proof, and feedback; the response is the accepted
+> correction. Failed-correction negatives remain an explicit training-objective
+> choice and are not default core rows.
+
+> **v11.21 (2026-06-30):** Lifecycle outbox rows are now retryable, not only
+> observable. `ReplayStore.get_pending_attempt_lifecycle_records(...)` exposes
+> non-terminal rows ready for reconciliation, and
+> `reconcile_attempt_lifecycle(...)` retries cleanup/cancel against the backend
+> and persists terminal or pending outcomes. Cleanup rows can end as
+> `deleted`, `deferred`, `failed`, or terminal `orphaned`; cancel rows can end
+> as `cancelling`, `drained`, `cleaned`, or `failed`. Direct whole-proof search
+> now carries active `verify_item_id:k` cancel diagnostics into replay. A
+> periodic scheduler/operator alerting loop landed later in v11.24; deployment
+> integration remains outside core LeanFoundry.
+
+> **v11.20 (2026-06-30):** Evaluation now has a local manifest-backed artifact
+> path. `BenchmarkManifest` is not only schema: `load_benchmark_jsonl(...)`
+> validates theorem rows against compatibility, env profile, and expected count.
+> `FixedModelEvalRunner.run(..., benchmark_manifest=..., artifact_dir=...)`
+> writes `eval_manifest.json`, `results.jsonl`, `benchmark.jsonl`, and
+> `report.md`, with result/benchmark/report SHA-256 hashes recorded in the
+> manifest metrics. This is the infrastructure artifact spine for local eval
+> runs; remote benchmark adapters remain future work.
+
+> **v11.19 (2026-06-30):** Policy prompt history/comment context now has an
+> inference-only API path. `PolicyClient.sample_tactics(...)` accepts a
+> `PolicyContext`; tree expansion derives `PolicyContext.proof_prefix` from the
+> runtime parent-action path, preserving inline comments, and the default HTTP
+> tactic prompt renders non-empty prefixes as Lean comments before the current
+> proof state. This does not mutate `FactorizedProofState`, does not define a
+> history-conditional training target, and does not change the Path-A row shape:
+> `PolicyExample.proof_prefix` remains provenance / optional prompt context.
+
+> **v11.18 (2026-06-30):** Value serving and negation now have runnable
+> baselines. `HTTPValueClient` supports both numeric-head/JSON scalar outputs
+> and natural-language reasoning that ends in a parseable boxed/JSON scalar; the
+> Slime runner can build bonded value clients against the SGLang router or
+> unbonded clients against a separate endpoint. `try_negation` is
+> provenance-gated and can run a conservative backend-grounded negation check
+> for eligible single-goal states by rendering a simple synthetic `¬ target`
+> theorem, stepping sampled tactics on that negation state, charging completed
+> attempts against `max_tactic_calls`, and marking the original state/root
+> `DISPROVED` if the negation closes. This is not yet the full Aristotle
+> UCB-competing persistent negation sub-search; richer local-context rendering,
+> and retryable/persistent negation traces remain future work. Durable
+> one-shot negation proof-attempt artifacts landed later in v11.27.
+
+> **v11.17 (2026-06-30):** Path-A step extraction is node-general for proved
+> runtime work. `TrainingArtifacts.policy_examples` now contains one positive
+> `(state, tactic)` row for every proved runtime action, including multiple
+> proved actions at the same state and proved internal subtrees under an
+> unproved root. In bonded mode, proved value labels are emitted for every
+> proved runtime state. Whole-proof `ProofTree` candidates remain canonical and
+> final-verifier-gated; rendered-HER subproof artifacts are still optional
+> Path-B work. Extraction failures are classified as `unsupported`,
+> `rendering`, or `verification`.
+
+> **v11.16 (2026-06-30):** Search-attempt lifecycle observability now has a
+> durable baseline. Cleanup diagnostics include the concrete backend item ids
+> still deferred after bounded retries, and best-effort cancel reports item
+> statuses or transport failures. When a replay store is present,
+> `persist_search_result(...)` writes those observations to
+> `attempt_lifecycle_outbox` with retry counts, last status/error, optional
+> `next_retry_at`, and a terminal flag. This is a durable sink/outbox only:
+> backend reconciliation, retry scheduling, terminal-orphan policy, and direct
+> search's active `verify_item_id:k` cancellation diagnostics remain future
+> lifecycle work.
+
+> **v11.15 (2026-06-30):** Full training-adapter contract tightened. The
+> authoritative implementation handoff is
+> [`slime_adapter_spec.md`](slime_adapter_spec.md). The downstream training repo
+> is thin: it launches Megatron/SGLang, supplies theorem records, chooses
+> hyperparameters/eval, and overrides model-specific prompt/parse/reward hooks;
+> LeanFoundry owns correct token/loss-mask construction for Slime `Sample`s.
+> Literature alignment: tree-search data is step-level expert-iteration/SFT
+> data (`proof_state -> tactic`) in the HTPS/ReProver/BFS-Prover lineage; it is
+> not a lazy substitute for whole-proof rendering. Whole-proof and
+> self-correction remain separate lineage-B targets. `SELF_CORRECT` needs a
+> persisted failed-proof / Lean-feedback / corrected-proof trace artifact before
+> it can emit real training rows. Value serving must support bonded and
+> unbonded deployment plus two parseable output modes: numeric-head/JSON scalars
+> and natural-language reasoning that ends in a validated scalar such as
+> `\boxed{0.73}`. Negation is required for semantic `DISPROVED`: only a proved
+> negation yields full-weight negative value labels; `EXHAUSTED`/open is merely
+> a censored negative after effort gating. Training rollouts fail on missing,
+> default, or mixed `env_profile`s until explicit multi-profile routing exists.
+
+> **v11.14 (2026-06-30):** Training-data model clarified — **two generation
+> modes = two training targets**, and hybrid inference is benign. (1) Tree search
+> emits Markovian per-node `(state, tactic)` step pairs = **lineage A**
+> (step-level prover): running the search algorithm distills its
+> selection/value/backup decisions into a step policy (expert iteration); train
+> as a step policy and roll out interactively/agentically at eval, where a goal
+> state is in-distribution. (2) Direct full-generation rollout emits a verified
+> whole proof = **lineage B** (whole-proof prover): one `/exec/verify`, the
+> model's own output, no rendering. LeanFoundry emits both; a model may train on
+> either or a mix (plus self-correct/reflection/comment-augmented data), and how
+> to combine, enhance, and group it (EI vs GRPO, `/- tactic state -/` comments,
+> etc.) is the **training repo's** choice — that comparison (does training *with*
+> a search algorithm beat plain whole-proof generation?) is the experiment the
+> training repo runs. **Hybrid/interactive inference** (feed the model a state,
+> let it generate to the end) needs **no special training target** — it is
+> inference-only and benign: DeepSeek-Prover-V1.5 trains *whole proofs* (with
+> `/- tactic state -/` comment augmentation to keep the resume point
+> in-distribution) and runs truncate-and-resume MCTS **only at inference**
+> (arXiv:2408.08152); a whole-proof- or step-trained model can be run in hybrid
+> mode without bespoke data. **Correction to v11.13:** there is NO separate
+> history-conditional / injected-state trajectory training target. A proof state
+> is Markov (a sufficient statistic), so interleaving injected goal states as
+> masked context is nonstandard and redundant; `PolicyExample.proof_prefix` is
+> optional provenance / incremental-script context only, and reconstructing it as
+> a script for a branching proof is the render problem. `loss_mask` /
+> `append_response_tokens(trainable=…)` is used only within a Sample's response
+> and for self-correct (masking verifier feedback), never for state interleaving.
+> **Rendering a whole proof FROM the tree is never on the data path** (tree →
+> step pairs; direct → the model's own proof); Path-B whole-proof rendering stays
+> a deferred product/audit artifact, never a data gate.
+
+> **v11.13 (2026-06-30):** Slime adapter ownership reversed. Because Slime is
+> the **default** RL engine, its rollout adapter is now first-class code that
+> ships **in this repo** under the existing `[training]` optional extra
+> (`leanfoundry/slime/`), not a sketch in the training repo. Hard invariant
+> unchanged: `import leanfoundry.proofsearch` must never pull in `slime`/
+> `sglang`; the adapter is an optional subpackage that only `[training]`
+> installs import, and core stays framework-free. The adapter is the
+> composition root — it builds `SGLangPolicyClient` and injects it into
+> `run_search_batch`, so the "engine never builds clients" rule still holds.
+> Everything model-agnostic (transport, n-sampling, state rendering, sample +
+> loss-mask construction) is provided here as runnable defaults on a
+> `SlimeRolloutRunner` with override hooks; the **training repo is thin** —
+> deployment launch (Megatron/SGLang topology, weight sync), the theorem
+> dataset, eval, run hyperparameters, and at most a small subclass overriding
+> model-specific hooks (`prompt_template`/`parse_completion`, reward/grouping).
+> One `SearchConfig` already serves both search modes (the `algorithm` field
+> discriminates direct whole-proof vs interactive tree), but the adapter's two
+> Slime-facing edges branch by mode: policy call (`sample_proofs` vs
+> `sample_tactics`) and `to_samples` shaping (one whole-proof Sample per
+> candidate vs per-node Markovian `(state, tactic)` step Samples sharing a
+> `rollout_id`; the trajectory/loss-mask wording here is corrected by v11.14).
+> Cost accepted: LeanFoundry now owns Slime API-compat, so this is gated
+> on pinning a Slime commit in `[tool.uv.sources]` plus `[training]` compat
+> tests (issue #20). Supersedes the §5.4 "keep Slime in the training repo"
+> framing below.
+
 > **v11.12 (2026-06-24):** Path-A core is now implemented end to end: schema,
 > sorry/admit rejection, render-free runtime extraction, SQLite replay store,
 > and driver wire-up. The top-level search result contract remains strict:
@@ -159,16 +828,16 @@
 >   `GET /exec/limits` (and rejects unbounded caps), which doubles as the
 >   connectivity check before any work. See Development Workflow.
 
-> **v11 (2026-06-17):** Adds Part V / Extension D — a controlled algorithm
-> ablation study (whole-proof outcome-only training vs. search-as-discovery
-> vs. search-with-shaped-credit, MCGS+HER+value) run under a frozen
-> theorem-to-round curriculum and a compute-matched evaluation design. This
-> is additive and decoupled: Stages 2-4 of the core training pipeline keep
-> their existing dynamic frontier filtering and adaptive exit criteria
-> unchanged, as the production "how far can we go" recipe. Extension D is a
-> separate, smaller-scale study that answers a different question — which
-> algorithm produces a better prover at matched compute, and why — using its
-> own frozen buckets and its own arms. See §25-32.
+> **v11 (2026-06-17):** Adds Part V / Extension D — a controlled training-target
+> study run under a frozen theorem-to-round curriculum and matched compute. The
+> comparison is whole-proof generation targets (lineage B), search-generated
+> step-level targets (lineage A), self-correction/comment enhancements, and mixed
+> recipes. This is additive and decoupled: Stages 2-4 of the core training
+> pipeline keep their existing dynamic frontier filtering and adaptive exit
+> criteria unchanged as the production "how far can we go" recipe. Extension D is
+> a separate, smaller-scale study answering whether the heavy search machinery
+> earns its keep as a data generator, compared with direct whole-proof generation,
+> using its own frozen buckets and arms. See §25-32.
 
 > **v10 (2026-06-09):** §2 reconciled with the shipped `/exec` backend —
 > structured `goals` (`GoalInfo`) and `messages` (`ExecMessage`), per-result
@@ -229,7 +898,8 @@ the sorry-initialized input surface is no longer missing.
 
 **G2 — state_value_labels distinguishes disproved from censored negative (resolved baseline).**
 `ValueLabel` and `state_value_labels` now carry both `weight` and `disproved`.
-A state marked DISPROVED via future negation pruning is definitively
+A state marked DISPROVED via synthetic negation, inversion, or another
+future semantic falsity certificate is definitively
 mathematically false — label=0 at full weight. A state searched but not proved
 is a censored negative — reduced weight because "not found by this policy" is
 not the same as false.
@@ -255,30 +925,55 @@ artifact text for final verification, not a Path-A data gate.
 
 This does **not** mean maintaining a second live structure in parallel with the search graph. There are two distinct structures with two distinct lifetimes, and both are custom (no off-the-shelf library provides them):
 
-1. **The live AND/OR search graph** — the engine's working structure (OR over a state's candidate actions, AND over the subgoals one action produces; a DAG once MCGS merging is on). It holds *everything*: dead branches, failed tactics, censored states, visit counts, value estimates. It is checkpointed to disk only for operational resume (P10); it is not training data. This is a substantial custom class — the heart of the Search Engine.
+1. **The live AND/OR runtime tree** — the engine's working structure (OR over a state's candidate actions, AND over the subgoals one action produces). It holds *everything*: dead branches, failed tactics, censored states, visit counts, value estimates, and negation sub-searches. It is not graph-merged in v0 and is not itself training data. This is a substantial custom class — the heart of the Search Engine.
 
-2. **The serialized `TacticNode` tree** — a *projection* extracted from the solved slice of the search graph at data-emission time, then written to `trajectories.tactic_sequence`. It is trivially custom (the 3-field dataclass above). A tree, not the graph, because (a) rendering to Lean text is inherently tree-shaped (`case inl => … case inr => …`), and (b) HER's "every proved *subtree* is a candidate" is only well-defined on a tree — a merged DAG node has several parents and no unambiguous subtree.
+2. **The serialized `TacticNode` tree** — a *projection* extracted from the solved slice of the runtime tree at data-emission time, then written to `trajectories.tactic_sequence`. It is trivially custom (the 3-field dataclass above). A tree, not a graph, because (a) optional rendering to Lean text is inherently tree-shaped (`case inl => … case inr => …`), and (b) proved-node reuse needs a witness subtree — a future merged DAG node would have several parents and no unambiguous single subtree.
 
-The remaining extraction work is node-general HER and richer Path-B rendering;
-the baseline durable representation is no longer a flat list.
+Node-general proved-node extraction now emits step-level Path-A policy/value
+rows directly from proved runtime work. The remaining rendering work is the
+optional Path-B artifact stream; the baseline durable representation is no
+longer a flat list and whole-proof rendering is not a data gate.
 
-**G4 — Inline comments must be preserved in tactic SFT data.**
-Aristotle's policy generates (hidden CoT) + (inline comment) + (tactic). Inline comments persist in the action history and serve as external persistent memory — future calls to the policy see the earlier reasoning context embedded in the proof. If SFT data strips comments from action strings, the model never learns to produce them and loses this mechanism. Fix: ensure the action string recorded in trajectories includes the full text the model generated, comments included. The prompt builder in the training repo must reconstruct the full prefix including comments for policy training.
+**G4 — Inline comments are preserved when the model emits them.**
+Aristotle's policy generates (hidden CoT) + (inline comment) + (tactic).
+Inline comments can persist in the action history and serve as external
+persistent memory — future policy calls may see earlier reasoning context
+embedded in the proof prefix. LeanFoundry records the full tactic/action text
+the model produced, comments included, and exposes `PolicyContext.proof_prefix`
+for inference-time prompt construction. Whether a downstream recipe asks the
+model to emit comments is a training-repo/model-hook choice, not a separate
+core data target.
 
 Scope note: comments do not exist in cold-start extracted data (LeanDojo/LeanTree proofs are human/extracted and carry no model-authored CoT comments), so G4 has no effect on Stage 1 SFT from those sources. Comments are produced by *our own policy* during search, only once it is prompted Aristotle-style to emit them; G4 is therefore a constraint on the *trajectory-recording* path of the flywheel (Stages 2+): record the model's full output verbatim so comments survive into the next round's SFT. Honoring it costs nothing now and is inert until commented generation is enabled (whether the base model emits useful comments at cold-start is a separate recipe question, adjacent to R5).
 
-**G5 — Negation pruning is not in the current search plan.**
-For each single-goal state `⊢ P`, a synthetic action should be added to the pool: prove `¬P` in the same local context. This action competes under normal UCB selection and receives a full sub-search — not a one-step check. If it succeeds, the state is marked DISPROVED and "dead" propagates upward through all parent AND-nodes, immediately eliminating them. This is Aristotle's hard-termination mechanism. Without it, provably-false subgoals are only abandoned via budget exhaustion. Fix: add negation augmentation as an optional flag in SearchEngine expansion (`try_negation: bool`, default False). Enable per-theorem by provenance (below); evaluate cost/benefit on traces before changing any default.
+**G5 — Conservative negation pruning has a current baseline.**
+For each eligible single-goal state `⊢ P`, `try_negation=True` may add a
+synthetic action to prove `¬P` in the same local context. The current
+implementation is provenance-gated, persistent, and searched by the normal
+AND/OR tree: the synthetic action owns the negated-theorem proof state as a
+child subtree, failed tactics leave it open for later selection, repeated
+policy outputs fail closed, and a completed negation proof marks the source
+state `DISPROVED`. Successful negation emits full-weight value negatives for
+the original state; tactics inside the negation proof train the synthetic
+negation goal, not the original false goal. Durable `NegationAttempt` artifacts
+record the rendered theorem, tactic attempts, statuses, and charged tactic
+calls.
 
 Semantics, to avoid two common confusions:
 - A Lean proof *state* holds a **list** of goals, not one (wire type `goals: list[GoalInfo]`). After `constructor` on `A ∧ B`, one state carries `⊢ A` and `⊢ B`. Whether to split a multi-goal state into separate nodes is a *search-engine* decision (the AND-split), and per the LeanTree lesson (§3.1) metavariable-coupled goals are **not** split — so multi-goal nodes do occur. The synthetic action is restricted to single-goal states because `¬P` is only a clean single action when there is exactly one goal `P`.
 - The negation is an extra entry in the state's **OR** action pool (a state is proved if *any* action proves it). A tactic never produces "OR goals": the subgoals one tactic produces are conjunctive (**AND** — all must close). OR is over *which action you choose*; AND is over *the subgoals an action spawns*.
 
-Provenance gating (per-theorem, not global): `try_negation` defaults **False** and is set by the SearchEngine from `TheoremSpec.source` (carried from the existing `theorems.source` column — see §4.2):
+Provenance gating (per-theorem, not global): `try_negation` defaults
+**False** and, when enabled in config, is further gated by
+`TheoremSpec.source` (carried from the existing `theorems.source` column — see
+§4.2):
 - **Off** for known-true targets (`leandojo`, `mathlib`, `minif2f`): every subgoal of a true theorem is itself true, so trying to disprove subgoals mostly wastes budget (and `¬P` is a *full sub-search*, retried under UCB, not one cheap step).
 - **On** for `autoformalized` statements and speculative subgoal-decomposition lemmas: these can be genuinely false, and negation is how search auto-rejects wrong statements / bad decompositions. This is central to the Extension B autoformalization flywheel — but it is a *pruning* accelerator; the flywheel's engine remains HER + pass-rate bucketing.
 
-So `TheoremSpec` must carry `source` (propagated from `theorems.source`); the engine maps source → `try_negation`. No new persisted column is required — the provenance label already exists in the data spine; it just needs to reach the in-memory spec. See R4 for the cost/benefit unknown that keeps this off by default for the LeanDojo core, and §3.5.1 for the mechanism.
+No new persisted column is required — the provenance label already exists in
+the data spine and reaches the in-memory `TheoremSpec`. See R4 for the
+cost/benefit unknown that keeps this off by default for known-true LeanDojo
+core runs, and §3.5.1 for the mechanism.
 
 ---
 
@@ -299,14 +994,25 @@ EnvClient microbatch window, max items per HTTP request, queue-depth
 backpressure, and worker-pool sizing. These are v0 profiling parameters, not
 open semantic design questions.
 
-**R2 — HER verified multiplier vs candidate multiplier gap.**
-The theoretical HER amplification (10–50× from Aristotle) assumes most proved subtrees survive standalone re-verification through Kimina. In practice, subproofs that reference outer local context will fail. The actual `her_verified_multiplier` is unknown until search-based training traces exist and node-general HER is implemented. If the gap to `her_candidate_multiplier` is large, HER's flywheel contribution is smaller than expected.
+**R2 — Step-level HER yield and optional whole-proof HER verification gap.**
+For LeanFoundry's primary lineage-A data path, HER means proved-node reuse:
+every proved runtime state can emit local `(state, tactic)` positives and value
+labels without rendering a standalone Lean proof. The empirical unknown is how
+many additional proved nodes appear beyond the root witness path once
+node-general extraction is implemented. Separately, optional lineage-B HER
+artifacts may try to render proved subtrees as standalone proofs; those still
+need `/exec/verify`, and their candidate/verified gap remains a diagnostic for
+the optional whole-proof artifact path, not a gate for step-level training.
 
 **R3 — Value function censored-negative weight.**
 The current design uses weight=0.25 for censored negatives. This is a guess. If too high, the value function becomes overly pessimistic and the policy stops exploring hard states. If too low, value is uncalibrated for failing states. Requires ablation once Stage 3 search-based EI is running.
 
-**R4 — Whether negation pruning is worth implementation cost at LeanDojo scale.**
-Negation pruning pays off when a significant fraction of budget is wasted on provably-false subgoals. At LeanDojo difficulty this fraction is unknown. Recommend deferring until Stage 3 search traces can be analyzed for how often goals are unprovable.
+**R4 — Whether negation pruning should be enabled at LeanDojo scale.**
+Negation pruning pays off when a significant fraction of budget is wasted on
+provably-false subgoals. The mechanism exists, but at LeanDojo difficulty the
+benefit/risk ratio is unknown. Keep it provenance-gated and off by default for
+known-true sources until search traces show how often goals are genuinely
+disprovable and how much budget the synthetic sub-search consumes.
 
 **R5 — Dynamic CoT budget training with Qwen3.6's thinking mode.**
 Aristotle trains CoT budget implicitly by only training on thinking traces that preceded successful actions. Qwen3.6-27B has native `<think>...</think>` tokens. Whether to enable thinking for tactic prediction (currently disabled by default), and how to train dynamic budget without dedicated trace infrastructure, is unresolved. Empirical ablation recommended: SFT with thinking enabled vs disabled for Format 2; measure tactic accuracy and proof discovery rate.
@@ -341,6 +1047,7 @@ LeanFoundry's position relative to existing systems:
 |---|---|---|---|
 | AlphaProof (DeepMind) | Closed AlphaZero-style RL prover interacting with Lean; Nature paper reports 2024 IMO silver-medal-level performance. | no | Strong closed precedent for verifier-grounded RL; not reusable infra. |
 | Aristotle (Harmonic) | Closed IMO-gold-level system with Lean proof search, informal lemma generation/formalization, geometry solver, MCGS, EI, HER, value labels, TTT, and large-scale stateless REPL infrastructure. | no | Closest north star. LeanFoundry is the open infrastructure analogue at smaller scale. |
+| HyperTree Proof Search (HTPS) | Neural theorem-proving algorithm using policy/value guidance, online proof search, and training from successful search traces. | paper/code | Direct prior for search-generated step data and value-guided tree search; confirms that state-tactic training data is prior art, not LeanFoundry's novelty. |
 | BFS-Prover-V2 (ByteDance Seed) | Open step-level Lean 4 prover system with multi-stage Expert Iteration, adaptive tactic filtering, periodic retraining, and planner-enhanced multi-agent tree search at inference. | model/code | Important open prover/search baseline; not a reusable Kimina/Harmonic-style stateless execution/search/replay/eval framework. |
 | BFS-Prover V1 | Best-first tree-search prover with self-filtering EI and DPO from compiler feedback. | model/code | Strong algorithmic baseline for best-first search; not infrastructure-first. |
 | DeepSeek-Prover-V1.5 | Lean-feedback RL plus RMaxTS-style search. | partial | Search/RL prior; not reusable execution runtime. |
@@ -351,6 +1058,8 @@ LeanFoundry's position relative to existing systems:
 | LeanDojo / LeanDojo-v2 | Data extraction, theorem/proof-state tracing, gym/tooling, training/eval/deployment framework for Lean provers. | yes | Upstream data/tooling foundation; LeanFoundry is the high-throughput search execution and replay layer. |
 | LeanTree | White-box Lean 4 proof-state factorization and dataset for intermediate states. | yes | Relevant state representation prior; not full search-training runtime. |
 | nanoproof | Minimal open AlphaProof/HyperTree Proof Search-style implementation using LeanTree server, MCTS prover, and distributed RL loop. | yes | Closest open experimental prior; still not a production-grade stateless Kimina/Harmonic-style infra framework. |
+| OProver | 2026 Lean 4 whole-proof/agentic framework with repair trajectories, retrieval memory, and iterative post-training over public Lean resources. | paper | Strong open whole-proof/repair baseline; reinforces that agentic repair data is a training-recipe baseline, not a LeanFoundry core-search novelty. |
+| Pythagoras-Prover | 2026 compute-efficient open Lean prover family spanning autoregressive and diffusion-style proof generation plus augmented formalization data. | paper | Strong recent whole-proof/proof-generation baseline; not a stateless search/replay/eval infrastructure framework. |
 | InternLM-StepProver / MPS-Prover / StepFun-Prover / Leanabell | Stepwise/tool-integrated prover systems using critics, search, verifier feedback, or RL. | mixed | Important baselines; generally model/prover pipelines rather than model-agnostic runtime infrastructure. |
 | Seed-Prover 1.5 / Delta-Prover | High-performing ByteDance formal proving systems with large-scale agentic RL and test-time scaling. | proofs/project | Latest competitive reference; not open reusable infra. |
 | Lean Copilot / Prover-Agent / Ax-Prover | Lean-native or agentic proof-assistant workflows using LLMs, Lean feedback, or auxiliary lemmas. | mixed | Adjacent human/agent tooling; not LeanFoundry-equivalent training-time search infrastructure. |
@@ -363,16 +1072,29 @@ high-throughput verification, MCGS/AND-OR search orchestration, trajectory
 capture, HER extraction, value labels, replay storage, and reproducible
 solved@budget evaluation.
 
+The step-level data shape itself is not the novelty. HTPS, LeanDojo/ReProver,
+BFS-Prover-style systems, and related step provers already train from
+proof-state/tactic interactions or search traces. LeanFoundry's novelty target
+is infrastructure and experimental control: one runtime can generate lineage-A
+step rows, lineage-B whole-proof rows, self-correction rows, value labels, and
+crossed eval artifacts under the same backend, curriculum, env profile, and
+budget accounting.
+
 Existing open systems cover important pieces of this stack, but sit at different
 layers. LeanDojo is data + gym; Kimina is verifier/server infrastructure;
 BFS-Prover-V2, Goedel-Prover-V2, DeepSeek-Prover-V2, Kimina-Prover,
 StepFun-Prover, Leanabell, InternLM-StepProver, MPS-Prover, Seed-Prover,
-DAP-style agents, Prover-Agent, and Ax-Prover are prover systems, models,
-or training recipes. Harmonic's Aristotle appears closest architecturally,
-but the high-performance search/runtime infrastructure is closed. LeanFoundry's
-contribution is the open infrastructure layer that lets different policies,
-value models, search algorithms, and training recipes plug into a common Lean
-proof-search substrate.
+DAP-style agents, Prover-Agent, OProver, Pythagoras-Prover, Delta-Prover, and
+Ax-Prover are prover systems, models, or training recipes. Harmonic's Aristotle
+appears closest architecturally, but the high-performance search/runtime
+infrastructure is closed. LeanFoundry's contribution is the open infrastructure
+layer that lets different policies, value models, search algorithms, and
+training recipes plug into a common Lean proof-search substrate.
+
+Source freshness note, 2026-06-30: this landscape was refreshed against
+primary arXiv/project pages for the named core systems. It remains background
+context, not a code contract. Re-run the source refresh before public release,
+benchmark claims, or citation-heavy writing.
 
 LeanDojo remains an upstream data/tooling dependency. LeanFoundry uses
 LeanDojo data and forks Kimina as the execution backend; the search engine,
@@ -418,7 +1140,8 @@ Trigger: model has plateaued on LeanDojo novel_premises split, and data
 diversity (not compute) is the limiting factor.
 
 ### Extension C: Test-Time Training Module (Part V, §21-24)
-> **Status: Design sketch. Implement after core system is stable.**
+> **Status: Generic local loop and trace-replay contract. Concrete trainer and
+> selected per-problem search source remain downstream/future work.**
 
 Per-problem LoRA fine-tuning on search traces found during inference,
 for olympiad-level targets with no other training signal. Evaluation-time
@@ -429,12 +1152,13 @@ only; does not replace or modify Stages 1-4.
 > passed curated pool exist. Does not modify Stages 2-4.**
 
 Holds base checkpoint, theorem-to-round curriculum, and total compute
-fixed, and varies only the training algorithm (outcome-only whole-proof
-EI, search-as-discovery-only, search-with-shaped-credit/MCGS+HER+value),
-to answer which algorithm produces a better prover and why — a question
-the production pipeline's adaptive, dynamically-filtered recipe (Stages
-2-4) is not designed to answer, since its frontier and exit criteria
-move with the live policy rather than staying fixed across arms.
+fixed, and varies the training target/recipe: whole-proof lineage B,
+search-generated step-policy lineage A, self-correction/comment enhancements,
+and mixed training. This answers whether search is worth its training-time cost
+as a step-data generator — a question the production pipeline's adaptive,
+dynamically-filtered recipe (Stages 2-4) is not designed to answer, since its
+frontier and exit criteria move with the live policy rather than staying fixed
+across arms.
 
 Trigger: Stage 1 cold-start checkpoint exists and is stable; runs
 alongside, not instead of, the core pipeline's own Stage 2-4 progression.
@@ -558,18 +1282,20 @@ Pantograph `state_id`. Worker death loses no search state. This is the
 prerequisite for preemptibility and horizontal scaling.
 
 **P3 — Durable data spine.**
-The Data Buffer is the single source of truth. All discovered proofs and
-training samples only "exist" once durably written to it. Every other
-module is reconstructible from the Data Buffer. This determines the
-storage technology: WAL-mode SQLite on single machine, PostgreSQL at
-cluster scale — never in-memory queues as the primary store.
+The Data Buffer is the durable archive for theorem inputs, verified proof
+artifacts, trajectories, policy/value rows, lifecycle outbox records,
+extraction failures, and negation attempts. In the current single-machine
+baseline this is WAL-mode SQLite plus manifest-backed eval files; Slime owns
+the online training buffer. Future cluster training may promote the same
+contracts to PostgreSQL or a queue-backed service, but in-memory queues are not
+the source of truth for replayable LeanFoundry artifacts.
 
 **P4 — Algorithm-agnostic interfaces.**
 `/exec/step_batch` does not know whether MCGS or beam search is calling
 it. `PolicyClient` does not know which search algorithm is using it.
-`RLEngineBase` does not know whether Slime or another framework implements
-it. Each interface expresses only its minimum contract. Components can be
-swapped without modifying their callers.
+The Slime adapter converts framework-neutral rows into trainer samples without
+changing the search engines. Each interface expresses only its minimum
+contract. Components can be swapped without modifying their callers.
 
 **P5 — Critical path latency is a first-class metric.**
 The Search Engine ↔ Env Backend link is on the critical path of every
@@ -611,11 +1337,13 @@ design with requirements that don't exist yet.
 
 **P10 — Preemptibility is a correctness property, not a performance
 optimization.**
-Any module must be killable at any time without data loss or search
-progress loss. On single machine this means: process isolation (not
-threads), MCGS graph checkpointing to disk, atomic weight sync writes,
-Data Buffer WAL, and PolicyClient auto-reconnect. These are designed in
-from the start; retrofitting preemptibility is expensive.
+The design target is that long-running components can be killed without losing
+accepted durable artifacts or leaking backend state. The current baseline
+supports idempotent replay writes, cleanup/cancel outbox persistence, and
+reconciliation hooks; it does not yet checkpoint an in-flight search tree for
+exact resume. Future graph/MCGS, cluster scale-out, and training orchestration
+must add explicit checkpoint/resume and atomic weight-sync semantics rather
+than assuming process lifetime.
 
 ---
 
@@ -1055,8 +1783,18 @@ The legacy REPL **`POST /verify`** (Kimina's original
 
 ### 2.8 Validation Harness
 
-Before trusting the Kimina `/exec` Env Backend for training, validate it reproduces known
-proof trajectories with correct cache behavior.
+Before trusting the Kimina `/exec` Env Backend for training, validate it
+reproduces known proof trajectories with correct focus, replay, verification,
+and cache behavior. The reusable local surface is
+`leanfoundry.env_backend.validation.validate_backend_case(...)`: callers provide
+a `BackendValidationCase` with a theorem, a tree-shaped tactic replay, and the
+complete proof code to check through `/exec/verify`. The runnable operator
+entry point is `leanfoundry-validate-backend` /
+`python -m leanfoundry.env_backend.validation_cli`; it accepts
+`BackendValidationCase` JSON or JSONL, enforces a single `env_profile` for the
+run, and emits a JSON summary with one report per case plus aggregate latency
+seconds. Each report records create latency, aggregate replay-step latency,
+verify latency when verification runs, and total case latency.
 
 For each known proof in LeanDojo:
 
@@ -1066,7 +1804,8 @@ For each known proof in LeanDojo:
 3. Compare resulting Pantograph goals to trace goals where trace data exists
 4. Render final proof from collected tactic history
 5. Verify final proof through /exec/verify
-6. Measure state-token size, load/tactic/save latency, and cache efficiency
+6. Measure create/replay/verify latency from the validation report; combine
+   with backend telemetry for state-token size and cache efficiency
 7. Stress queueing with many proof-state items per batch
 ```
 
@@ -1093,10 +1832,12 @@ Validate before any training run.
 
 The search engine is a Python process that orchestrates direct and tree search. It has no
 Lean knowledge — it only knows about nodes, actions, values, and scores.
-All Lean execution is delegated to an EnvBackend client. In the v0
-implementation, that client is the `lean-client` `AsyncLeanExecBackend` façade
-(one object owning the HTTP client, the proof-state env, and the step batcher);
-the SearchEngine should not import `lean_client` directly.
+All Lean execution is delegated to an `EnvBackend` client. The `/exec` wire
+schema is owned by the `lean-client` package, so protocol-facing modules may
+import `lean_client.exec_models` directly. Only
+`leanfoundry/env_backend/kimina_backend.py` constructs the concrete
+`AsyncLeanExecBackend` façade; search code receives an injected `EnvBackend`
+and does not build backend transports.
 
 ### 3.1 Proof Tree Structure and State Equivalence
 
@@ -1147,7 +1888,7 @@ v0.3:
   - mark tactics with global-state behavior as merge-unsafe unless validated
 
 Acceptance gate:
-  - every merged proof path renders to Lean and passes strict /verify
+  - every merged proof path renders to Lean and passes `/exec/verify`
   - Pantograph state-token replay agrees with trace goals where trace data exists
   - no drop in render_verify_success_rate
   - solved@budget improves over graph-merge-off tree MCTS
@@ -1344,44 +2085,59 @@ async def expand(state: FactorizedProofState, model_client, env_client, n_tactic
 
 ### 3.4 Hindsight Experience Replay (HER)
 
-A proved internal node is a candidate training root. HER candidates become
-A-type data only after context reification, proof rendering, deduplication,
-and `/exec/verify` (§2.7, path C) under the same env_profile.
+A proved runtime node is a reusable training root. LeanFoundry has two HER
+surfaces, and they must not be conflated:
 
-The proof is represented as a `TacticNode` tree (see concern G3). HER
-candidates are extracted by iterating all proved subtree roots in the tree.
-Each proved subtree has its own `rendered_lean` reconstructed from tactic
-history and is re-verified independently by Kimina before entering training.
+1. **Lineage-A step HER (primary data path):** emit local `(state, tactic)`
+   policy positives and proved value labels from any proved runtime state. This
+   does **not** render a standalone Lean proof. The edge was already executed by
+   `/exec/step_batch`, the child subtree is structurally proved, and the
+   sorry/admit guard prevents reward-hack closures. This is the natural
+   step-level analogue of HER: a proved internal state becomes another supervised
+   proof-state example.
+2. **Lineage-B whole-proof HER (optional artifact path):** attempt to render a
+   proved subtree as a standalone Lean proof, deduplicate it, and re-verify it
+   under the same `env_profile` before inserting an A-type whole-proof row. This
+   path is useful for audits or whole-proof training enrichment, but it is not a
+   training-data gate for lineage A.
+
+The proof witness is represented as a `TacticNode` tree (see concern G3). For
+lineage-A extraction, depth-first traversal of proved nodes yields step rows.
+For optional whole-proof HER, the same tree can provide render candidates.
 
 Track two multipliers separately:
 
 ```
-her_candidate_multiplier = candidate_subproofs / verified_root_proofs
-her_verified_multiplier  = verified_subproofs  / verified_root_proofs
+step_her_multiplier       = proved_step_rows / root_witness_step_rows
+render_her_candidate_mult = rendered_subproof_candidates / verified_root_proofs
+render_her_verified_mult  = verified_rendered_subproofs / verified_root_proofs
 ```
 
-The gap between these is a key diagnostic (see concern R2). Candidates that
-fail re-verification — typically because they reference outer local context
-not present when run as standalone roots — are discarded silently.
+The step multiplier is the one that matters for the default search-training
+loop. The render candidate/verified gap is a Path-B artifact diagnostic (see
+concern R2). Render candidates that fail re-verification — typically because
+they reference outer local context not present when run as standalone roots —
+are discarded from the optional whole-proof artifact stream only.
 
 ```python
-def extract_all_subproof_candidates(proof_tree: TacticNode) -> list[TrainingSample]:
-    candidates = []
-    for node in iter_proved_subtree_roots(proof_tree):
-        candidates.append(TrainingSample(
-            root_state=node.state,
-            tactic_tree=node,                         # TacticNode tree, not flat list
-            whole_proof=node.render_as_lean_proof(),
-            depth=node.depth,
-            search_budget_used=node.subtree_tactic_count(),
-            requires_reverification=True,
+def extract_step_her_rows(proved_nodes: list[StateNode]) -> list[PolicyExample]:
+    rows = []
+    for state in proved_nodes:
+        action = state.proved_action()
+        if action is None:
+            continue
+        rows.append(PolicyExample(
+            state=state.state,
+            tactic=action.tactic,
+            proof_prefix=proof_prefix_for_state(state),
         ))
-    return candidates
+    return rows
 ```
 
-When node-general HER lands, only independently verified HER samples enter
-`a_type_data`. Path-A policy/value rows are produced from accepted search steps,
-not from whole-proof HER rendering.
+Node-general step extraction now writes proved-node rows to `policy_examples`
+and proved/disproved/censored values to `state_value_labels` directly from
+accepted search steps. Only optional rendered Path-B HER artifacts would enter
+`a_type_data`, and only after independent `/exec/verify`.
 
 ### 3.5 Value Function Data
 
@@ -1397,6 +2153,19 @@ to avoid labeling under-explored states as negative.
 **Disproved states**: states where the logical negation of the goal was
 proved via negation pruning (see G5). These ARE definitively mathematically
 false. Train with full weight. Stored with `disproved=TRUE` in the schema.
+
+The runtime interface stays simple: `ValueClient.estimate(states)` returns one
+finite probability-like float in `[0, 1]` per state. Implementations may be:
+
+- **unbonded**: a separate value endpoint/checkpoint;
+- **bonded**: the policy checkpoint prompted or tasked as a value model;
+- **numeric-head**: endpoint returns a direct scalar/logit/JSON score;
+- **natural-language**: model reasons within a token budget, then emits a
+  parseable scalar such as `\boxed{0.73}` or `{"score": 0.73}`.
+
+Invalid, missing, or out-of-range value outputs are diagnostics or hard
+failures. They are not silently converted into neutral scores unless a caller
+explicitly configures a fallback for an experiment.
 
 ```python
 def extract_value_labels(
@@ -1437,12 +2206,17 @@ def extract_value_labels(
 
 ### 3.5.1 Negation Pruning (try_negation flag, default False)
 
-> See concern G5. Not yet implemented. Gated per-theorem by provenance, not
-> globally: the SearchEngine sets `try_negation` from `TheoremSpec.source` —
-> off for known-true targets (`leandojo`/`mathlib`/`minif2f`), on for
-> `autoformalized` and speculative-decomposition statements where the goal may
-> be genuinely false. Restricted to single-goal states (a Lean state may hold
-> multiple goals; `¬P` is a clean action only when there is one).
+> See concern G5. The current implementation is a conservative persistent
+> backend-grounded negation action. It is initialized once for an eligible
+> state, attaches the synthetic negation proof state as its child, competes as
+> an open OR action under the normal selector, and searches tactics/subgoals
+> inside that synthetic proof with the same AND/OR machinery. Negation is gated
+> per-theorem by provenance, not globally: `try_negation` is off for known-true
+> targets
+> (`leandojo`/`mathlib`/`minif2f`) and on for `autoformalized` and
+> speculative-decomposition statements where the goal may be genuinely false.
+> It is restricted to single-goal states (a Lean state may hold multiple goals;
+> `¬P` is a clean action only when there is one).
 
 ```python
 def should_try_negation(spec: TheoremSpec) -> bool:
@@ -1451,11 +2225,22 @@ def should_try_negation(spec: TheoremSpec) -> bool:
     return spec.source in {"autoformalized"}   # extend per Extension B / decomposition
 ```
 
-For each new single-goal state with goal `⊢ P`, a synthetic action is added
-to the state's action pool: prove `¬P` (i.e., `P → False`) in the same local
-context. This action competes under normal UCB selection alongside all other
-candidate tactics. It receives a full sub-search — UCB can select and retry
-it across many iterations with different tactic attempts each time.
+Target behavior: for each new single-goal state with goal `⊢ P`, a synthetic
+action is added to the state's action pool: prove `¬P` (i.e., `P → False`) in
+the same local context. This action competes under normal UCB selection
+alongside other candidate tactics and receives a real child subtree. If a
+negation tactic leaves open subgoals, those states are expanded normally; if
+the child subtree closes, the source state is marked `DISPROVED`. Policy rows
+inside the child subtree are positives for the synthetic negation goal, not for
+the original false state.
+
+Rendering is fail-closed. Ordinary hypotheses render as typed theorem
+parameters. Local definitions / `let` entries are also rendered as typed
+parameters, intentionally dropping the defining value: proving the negated
+target for every value of that parameter is stronger than proving it under the
+local definition, so success remains a valid falsity certificate. Missing names,
+invalid binder identifiers, and empty types are unsupported and emit a durable
+negation attempt artifact instead of guessing Lean surface syntax.
 
 If the negation is proved, the state is marked DISPROVED. Propagation sends
 "dead" upward through all parent AND-nodes containing this state: an AND-node
@@ -1512,7 +2297,11 @@ for model calls; search code does not construct those clients.
 ### 1. Direct Whole-Proof Sampling
 
 The model samples complete Lean proofs from theorem statements.
-LeanFoundry verifies all attempts in batch and reports pass@k.
+LeanFoundry verifies every sampled candidate in the pass@k pool and reports
+pass@k from accepted candidate indices. Current implementation batches the
+plain `DIRECT` candidate pool through `EnvBackend.verify(...)`; self-correction
+uses sequential `verify_one` calls because verifier feedback conditions the
+next prompt.
 
 Use cases: baseline evaluation, whole-proof Expert Iteration, GRPO
 rollouts, comparison against Goedel/DeepSeek-style systems.
@@ -1590,7 +2379,7 @@ later algorithms
   tactic beam search
   optimistic / RMaxTS-style search
   validated MCGS state merging
-  AND/OR MCGS with node-general HER
+  AND/OR MCGS with node-general proved-node extraction
 ```
 
 ---
@@ -1645,8 +2434,8 @@ CREATE TABLE theorems (
 );
 ```
 
-`source` is the provenance label propagated into `TheoremSpec.source`; it is
-the future gate for `try_negation` (§3.5.1).
+`source` is the provenance label propagated into `TheoremSpec.source`; it gates
+`try_negation` (§3.5.1).
 
 ### 4.3 Trajectories (Replay Buffer)
 
@@ -1709,9 +2498,9 @@ CREATE TABLE state_value_labels (
 );
 ```
 
-`disproved=TRUE` is reserved for future semantic falsity certificates such as
-negation pruning. `label=0, disproved=FALSE` is a censored negative and carries
-a reduced `weight`.
+`disproved=TRUE` is reserved for semantic falsity certificates such as
+provenance-gated `try_negation`. `label=0, disproved=FALSE` is a censored
+negative and carries a reduced `weight`.
 
 ### 4.4 Formalizer Output (B-Type Statements from Extension B)
 
@@ -2028,12 +2817,15 @@ after the model-state fit is resolved.
 
 ### 5.4 Slime Integration
 
-Slime (THUDM) is the intended online RL orchestrator for the training repo
-because it provides Megatron-LM + SGLang integration, weight synchronization,
-and a custom rollout interface. It is **not** part of the LeanFoundry core
-execution path. The dependency is available only through the CI-excluded
-`training` optional extra, and the in-repo `SlimeAdapter` remains a placeholder
-until a pinned Slime commit and compatibility tests are chosen.
+Slime (THUDM) is the **default** online RL orchestrator: it provides
+Megatron-LM + SGLang integration, weight synchronization, and a custom rollout
+interface. Because it is the default, its rollout adapter ships **in this repo**
+(`leanfoundry/slime/`) as runnable defaults, available only through the
+`[training]` optional extra (see v11.13 note). The hard invariant is that the
+adapter never enters the core execution path: `import leanfoundry.proofsearch`
+must not pull in `slime`/`sglang`. The adapter is pinned and drift-tested under
+`[training]`; bumping Slime is a deliberate compatibility event, not a silent
+track of Slime `main`.
 
 The source-level integration shape is pull, not push. Slime loads a rollout
 function and calls it each rollout iteration; LeanFoundry does not stream
@@ -2041,7 +2833,7 @@ samples into Slime's buffer through `RLEngineBase.submit_samples(...)`. The
 clean hook for theorem proving is the full rollout function:
 
 ```text
---rollout-function-path training_repo.rollouts.lean_rollout.generate_rollout
+--rollout-function-path leanfoundry.slime.generate_rollout
 ```
 
 The per-sample hook `--custom-generate-function-path` is useful for linear
@@ -2055,39 +2847,62 @@ batching across proof graphs and trajectory extraction awkward.
 That function returns `list[list[Sample]]` groups to Slime. LeanFoundry's role
 inside it is algorithm-neutral search and optional durable side-write to the
 SQLite `ReplayStore`; Slime owns the online data buffer and trainer. The full
-rollout function owns the theorem-search orchestration:
+rollout function ships here (`leanfoundry/slime/rollout.py`) as the default
+`generate_rollout`; the training repo just points
+`--rollout-function-path leanfoundry.slime.generate_rollout` at it and supplies
+config/overrides. Default body (simplified from the in-repo implementation;
+helpers are model-agnostic defaults and `lf_runner_class` can override them):
 
 ```python
-# training_repo/rollouts/lean_rollout.py
-from leanfoundry.env_backend import make_env_backend
-from leanfoundry.proofsearch import SearchConfig, run_search_batch
-from training_repo.policy import SlimePolicyClient
-from training_repo.samples import samples_from_search_results
+# leanfoundry/slime/rollout.py  (ships under the [training] extra)
+from leanfoundry.proofsearch import run_search_batch
+from leanfoundry.proofsearch.to_rows import to_training_rows
+from leanfoundry.slime.runner import SlimeRolloutRunner
 
-async def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
-    theorem_groups = data_buffer.get_samples(args.rollout_batch_size)
 
-    env = await make_env_backend(args.env_backend_config)
-    policy = SlimePolicyClient(args)
-    search_cfg = SearchConfig.from_args(args)
+async def async_generate_rollout(args, rollout_id, data_source, evaluation=False):
+    runner = SlimeRolloutRunner()  # or args.lf_runner_class
+    env = runner.build_env_backend(args)
+    await env.connect()
+    policy = runner.build_policy_client(args)
+    value = runner.build_value_client(args)  # bonded, unbonded, or None
+
+    source_samples = runner.source_samples(data_source, args)
+    theorems = runner.theorems_from_source(source_samples, args)
+    runner.validate_env_profiles(theorems, args)
 
     search_results = await run_search_batch(
-        theorem_groups=theorem_groups,
-        policy=policy,
-        env=env,
-        config=search_cfg,
-        evaluation=evaluation,
+        theorems,
+        policy_client=policy,
+        value_client=value,
+        env_backend=env,
+        config=runner.search_config(args),
+        model_version=rollout_id,
     )
 
-    samples = samples_from_search_results(search_results)
-    return samples
+    rows = [
+        row
+        for result, theorem in zip(search_results, theorems)
+        for row in to_training_rows(
+            result,
+            theorem,
+            include_failed_self_correct_negatives=getattr(
+                args,
+                "lf_include_failed_self_correct_negatives",
+                False,
+            ),
+        )
+    ]
+    return runner.to_samples(rows, rollout_id, args)
 ```
 
-`Sample` can represent either Path-A formulation: one Markovian row per node
-(`prompt=state`, `response=tactic`) or a history-conditional trajectory where
-the prompt includes `proof_prefix` and the loss mask trains only model-authored
-tactic spans. Grouping for EI vs GRPO is a training-side decision; core
-extraction keeps emitting algorithm-neutral `TrainingArtifacts`.
+For tree mode, `Sample` represents one Markovian row per proved node:
+`prompt=state`, `response=tactic`. Sibling step samples produced by the same
+search share the same Slime `rollout_id`, so downstream loss aggregation can
+avoid over-counting one proof search just because it produced many local rows.
+There is no history-conditional or injected-state trajectory sample. Grouping,
+reward shaping, and EI-vs-GRPO treatment are adapter/training-side decisions;
+core extraction keeps emitting algorithm-neutral `TrainingArtifacts`.
 
 ---
 
@@ -2238,7 +3053,8 @@ Current Path-A output:
   attempt                   → trajectory + replay diagnostics
 
 Deferred output:
-  each verified proved subtree → HER subproof sample (subproof=TRUE)
+  node-general proved-state rows → extra lineage-A step samples
+  optional rendered proved subtree → verified Path-B whole-proof artifact
   node-general DISPROVED labels → full-weight value negatives
 ```
 
@@ -2332,11 +3148,11 @@ Each iteration:
 
 4. Add to A-type data
    For each verified proof: insert into a_type_data with source='search_found'
-   HER subproof extraction is deferred to the node-general HER slice
+   Optional rendered-subproof HER is deferred and is not the Stage 2 data gate
 
 5. Train
    Sample from full replay buffer (all A-type data, old and new)
-   SFT on whole-proof and tactic-sequence formats
+   SFT on whole-proof and optional proof-prefix/tactic formats
    One pass over new data, fractional pass over old data
 
 6. Update model in SGLang
@@ -2354,11 +3170,11 @@ Run until frontier theorems are mostly cleared
 reach (pass_rate=0 from Stage 2). This is a training data generator,
 not an optional inference enhancement.
 
-Tree search during training finds proof steps and sometimes whole proofs the
-model cannot generate directly, then trains the model on Path-A policy/value
-artifacts and verified whole-proof artifacts when available. Graph/MCGS and
-node-general HER are later upgrades to this loop, not prerequisites for the
-baseline.
+Tree search during training produces lineage-A step data: Markovian
+`(proof_state, tactic)` rows chosen by search, plus value labels when label mode
+owns them. Optional rendered+verified whole proofs are audit/enrichment
+artifacts, not the data path. Graph/MCGS and richer search features are later
+upgrades to this loop, not prerequisites for the baseline.
 
 Each iteration:
 
@@ -2370,20 +3186,20 @@ Each iteration:
    Use Env Backend /exec/step_batch with Pantograph state_tokens
    Simultaneously:
      policy calls  → SGLang (sample 8 tactics per state)
-     value calls   → SGLang (estimate proof probability per state)
+     value calls   → ValueClient (bonded/unbonded; numeric or NL scalar)
      tactic exec   → Env Backend
 
 3. Collect training data from search
    Proved tactic edges: insert into policy_examples
    State labels: insert into state_value_labels when label mode owns them
-   Successful rendered+verified proofs: optional whole_proof A-type sample
-   HER subproofs: deferred until node-general extraction lands
+   Node-general proved-state rows: deferred extraction hardening
+   Successful rendered+verified proofs: optional whole_proof A-type artifact
 
 4. Train
    Policy loss:       cross-entropy on Path-A policy examples
    Value loss:        binary cross-entropy on state_value_labels
-   Whole-proof loss:  cross-entropy on successful proof strings
-   Combined: policy_loss + value_loss * 0.5
+   Whole-proof loss:  optional, only from direct or rendered verified artifacts
+   Combined default: policy_loss + value_loss * 0.5
 
 5. Update model (Slime weight sync)
 
@@ -2502,8 +3318,9 @@ Search quality:
   search_proofs_per_10k_calls efficiency of tree/search execution
   replay_buffer_size          total verified proofs in A-type store
   value_function_auc          AUC on state_value_labels held-out set
-  her_candidate_multiplier    candidate HER samples / verified root proofs
-  her_verified_multiplier     verified HER samples / verified root proofs
+  step_her_multiplier         proved step rows / root witness step rows
+  render_her_candidate_mult   rendered subproof candidates / verified root proofs
+  render_her_verified_mult    verified rendered subproofs / verified root proofs
 
 Training metrics (W&B):
   pass_at_1                   direct generation success rate
@@ -2738,7 +3555,7 @@ Mitigation: mandatory Kimina re-verification of ALL external A-type data
 under our env_profile before insertion. Reject without re-verification.
 
 **Risk: Search finds only trivial proofs**
-Replay buffer fills with easy Path-A examples or future verified HER subproofs.
+Replay buffer fills with easy Path-A examples or future step-HER rows.
 Model learns to prove easy lemmas and stops improving on harder ones.
 Mitigation: track proof complexity (search_budget_used). Filter out
 trajectories with budget_used < 5 from tactic-policy training.
@@ -2764,11 +3581,13 @@ Mitigation: monitor queue_wait_p95 and worker RSS. If queue_wait_p95 is
 consistently > 200ms, reduce search parallelism, increase worker_pool_size if
 RSS headroom allows, or move to Extension A scale-out.
 
-**Risk: MCTS tree memory overflow**
+**Risk: Tree-search memory overflow**
 Long search trees for hard theorems exhaust RAM.
-Mitigation: max tree size of 10k nodes. When exceeded, prune states
-with visit_count=1 and low value_estimate. Serialize pruned subtrees
-to disk if needed.
+Mitigation: track node count, resident memory, and per-theorem expansion
+profiles during real runs. Do not add `max_tree_nodes` to `SearchConfig`
+until traces justify whether this is a semantic search budget or a separate
+operational guard. If needed later, add a fail-closed operational cap and
+persist enough diagnostics to tune it before introducing pruning.
 
 **Risk: Later SFT/RL reduces diversity**
 GRPO or fine-tuning improves pass@1 but reduces pass@32 and MCTS
@@ -2790,28 +3609,29 @@ change. The public API exposes only LeanFoundry's own abstractions:
 ```
 Correct names in LeanFoundry source:   Incorrect (implementation leak):
   EnvBackend                             KiminaClient / kimina_url / server.Settings
-  RLEngine / RLEngineBase                SlimeAdapter (internal only)
+  generate_rollout / TrainingRow         RLEngineBase / submit_samples
   SearchEngine                           ConcreteMCTSEngine / raw_mcts_search
   PolicyClient                           sglang_url
   /exec/step_batch                       /mcts/step_batch
 ```
 
-- `lean_client` appears only in the EnvBackend adapter/launcher boundary, for
-  example `leanfoundry/env_backend/kimina_backend.py`. Search, rollout, eval,
-  and training code import `EnvBackend`, not `KiminaClient`.
+- `lean_client.exec_models` is the canonical `/exec` wire schema and may be
+  imported by EnvBackend, search helpers, replay lifecycle code, and tests.
+  Only `leanfoundry/env_backend/kimina_backend.py` constructs
+  `AsyncLeanExecBackend`; search, rollout, eval, and training code receive an
+  `EnvBackend`, not a `KiminaClient`.
 - LeanFoundry never imports the server package. No `server.settings`,
   `server.main`, `PantographManager`, or worker classes appear in LeanFoundry.
   The current server is an app process launched by `python -m server` or by
   `lean_client.launch_server`.
-- `SGLang` does not appear in LeanFoundry core. It is internal to the training
-  repo or a future optional adapter and is exposed to search only through
-  `PolicyClient`.
+- `SGLang` does not appear in LeanFoundry core. It is isolated to the optional
+  `[training]` Slime adapter and exposed to search only through `PolicyClient`
+  / `ValueClient`.
 - `MCTS` does not appear as a class name or endpoint name. The search
   algorithm type (MCGS, beam, direct) is a parameter to `SearchEngine`,
   not a hardcoded identity.
-- `Slime` appears only in the optional `training` extra, docs, and the
-  placeholder `rl_engine/slime_adapter.py`. The landed Path-A core does not
-  import Slime.
+- `Slime` appears only in the optional `training` extra, docs, and
+  `leanfoundry/slime/`. Core search/replay/eval imports do not import Slime.
 
 This allows swapping any implementation without changing the public API.
 
@@ -2865,24 +3685,34 @@ proofsearch/
   and_or.py: AND/OR tree search with PUCT or best-first SelectionStrategy
   expansion/backprop/lifecycle helpers for EnvBackend.step(), cleanup, cancel
   Path-A extraction: policy_examples and value_labels from runtime tree
+  value-label extraction, durable negation attempts, and persistent retries
   narrow optional proof rendering for direct/easy Path-B artifacts
-  deferred: graph/MCGS, node-general HER, negation pruning, richer rendering
+  deferred: graph/MCGS and richer Path-B rendering
 
 evals/
-  Eval schemas and protocol stubs
-  deferred: benchmark loaders, direct/self-correct/tree eval runners,
-  pass@k, solved@budget curves, artifact manifests, report generation
+  Eval schemas, benchmark source loader, row-format adapter hook,
+  fixed-model eval runner, pass@k/solved@budget metrics,
+  artifact manifests, content hashes, and report generation
+  future: concrete public-benchmark row adapters and deployment wiring
 
 schemas/
   SQL migrations (theorems, a_type_data, trajectories, policy_examples,
-  state_value_labels, formal_statements_staging)
+  state_value_labels, formal_statements_staging, lifecycle outbox,
+  extraction failures, negation attempts)
   Pydantic models for all data types
   Eval artifact schema
 
 replay/
   ReplayStore protocol
   SQLiteReplayStore and deterministic row ids
-  writer for theorem, trajectory, policy, value, and A-type artifacts
+  writer for theorem, trajectory, policy, value, A-type, extraction failure,
+  lifecycle, and negation artifacts
+
+slime/
+  Optional `[training]` rollout adapter
+  Pull-shaped generate_rollout entrypoint for Slime
+  SGLang policy client, value-client wiring, row-to-Sample conversion,
+  token/loss-mask construction, env-profile validation, and live smoke harness
 
 docker/
   Env Backend image (backend SHA + env_profile hash in tag)
@@ -2900,17 +3730,9 @@ configs/
   eval_final.yaml
 
 rollouts/
-  slime_whole_proof_rollout.py
-  slime_mcts_rollout.py
-  slime_self_correction_rollout.py
-  slime_lemma_decomposition_rollout.py  -- Aristotle-style: informal proof → lemma
-                                        -- chain → formalize → MCTS per sorry block
-                                        -- Uses TheoremSpec.initial_lean_block
-                                        -- Training repo owns all LM orchestration;
-                                        -- infra only sees sorry-initialized TheoremSpec
-
-model_clients/
-  sglang_policy_client.py     ← implements PolicyClient protocol
+  launch_slime_with_leanfoundry.py
+  optional project subclass of leanfoundry.slime.SlimeRolloutRunner
+  model-specific prompt/parse/reward/group hooks only
 
 data_prep/
   load_leandojo.py
@@ -2932,12 +3754,18 @@ reports/
 The training repo owns dataset choice and mixture weights, including whether
 to ingest LeanTree. The infra repo owns proof-state semantics, EnvBackend
 execution, replay validation, search, and eval. The training repo never calls
-Lean directly. All Lean interaction goes through the infra repo's SDK:
+Lean directly. All Lean interaction goes through the infra repo's SDK and the
+optional Slime rollout adapter:
 
 ```python
-from leanfoundry.env_backend import EnvBackend
-from proofsearch import MCGSSearch
-from evals import run_eval
+from leanfoundry.env_backend import EnvBackendConfig, make_env_backend
+from leanfoundry.evals import FixedModelEvalRunner
+from leanfoundry.proofsearch import (
+    SearchAlgorithm,
+    SearchConfig,
+    run_search_batch,
+)
+from leanfoundry.slime import SlimeRolloutRunner
 ```
 
 The concrete Kimina adapter is small and isolated:
@@ -2966,27 +3794,32 @@ not on SGLang or any specific inference framework:
 class PolicyClient(Protocol):
     async def sample_proofs(
         self,
-        prompts: list[str],
+        prompts: Sequence[str],
+        *,
         n: int,
-        params: dict
-    ) -> list[str]: ...
+        params: PolicySamplingParams | Mapping[str, Any] | None = None,
+    ) -> list[list[str]]: ...
 
     async def sample_tactics(
         self,
-        states: list[FactorizedProofState],
+        states: Sequence[FactorizedProofState],
+        *,
         n: int,
-        params: dict
+        params: PolicySamplingParams | Mapping[str, Any] | None = None,
+        context: Sequence[PolicyContext] | None = None,
     ) -> list[list[str]]: ...
 
-    async def estimate_values(
+class ValueClient(Protocol):
+    async def estimate(
         self,
-        states: list[ProofState]
+        states: Sequence[FactorizedProofState],
     ) -> list[float]: ...
 ```
 
-The training repo's `sglang_policy_client.py` implements this protocol
-using SGLang. Anyone else can implement it with vLLM, Transformers,
-an API model, or a rule-based system for ablations.
+The training repo or LeanFoundry's optional Slime adapter can implement these
+protocols with SGLang, vLLM, Transformers, an API model, or a rule-based system
+for ablations. Policy sampling and value estimation are intentionally separate
+interfaces.
 
 ### Versioning Contract
 
@@ -3055,8 +3888,14 @@ also the connectivity check before any real work.
 ---
 
 # Part III: [EXTENSION A] Multi-Machine Scale-Out
-> **Status: Designed, implementation deferred. Trigger: single-machine
-> throughput is the bottleneck, not model capability.**
+> **Status: Local reference baseline, deployment implementation deferred.
+> Trigger: single-machine throughput is the bottleneck, not model capability.
+> LeanFoundry now owns typed router metrics/autoscale decisions and portable
+> state references, a binary frame codec, pure router scheduler semantics, and
+> a reference asyncio TCP router service with optional HTTP health/metrics. It
+> does not implement the production router deployment, backend state
+> export/import, distributed replay stores, or site-specific supervisor and
+> autoscaler integration.**
 
 ## 11. What Changes at Multi-Machine Scale
 
@@ -3136,7 +3975,14 @@ Commands:
   0x04  FORWARD    router → backend: "execute this"
   0x05  DELIVER    router → client: "here is your result"
   0x06  HEARTBEAT  any → any: keepalive on idle connection
+  0x07  CANCEL     router → backend: "cancel this request if still running"
 ```
+
+The local frame-codec baseline is `RouterFrame`: `encode_router_frame(...)`
+and `decode_router_frame(...)` implement this exact header in network byte
+order and reject short frames, unknown command bytes, and length mismatches.
+The payload is still opaque bytes here; command-specific payload schemas belong
+to the later router adapter/service boundary.
 
 **Why inverted backend connection direction:**
 
@@ -3231,6 +4077,73 @@ The key insight: GKE's default autoscaling only sees "CPUs are busy" — it
 cannot see queue depth. This formula uses queue depth to determine how many
 machines are actually needed.
 
+The local baseline is `plan_router_scale(...)`: it accepts `RouterMetrics`
+(`queue_length`, `requests_last_minute`, `avg_backends_last_minute`) and returns
+an `AutoscaleDecision` with `target_min_replicas`, a reason, and the estimated
+per-backend throughput. It is a pure decision helper; applying the decision to
+GKE, Slurm, or another cluster manager remains deployment work.
+
+The local router-state baseline is `RouterState`: `register_backend(...)`
+adds a backend with a fixed CPU-slot capacity, `enqueue_request(...)` appends a
+client request to the FIFO queue, `complete_request(...)` frees one in-flight
+slot and drains pending work, `cancel_inflight_requests(...)` removes abandoned
+in-flight work and drains pending work into the freed slots, and
+`disconnect_backend(...)` removes a backend while requeueing its in-flight
+requests. The helper deliberately has no socket service, client connection
+table, backend state export/import, or payload transfer. Those remain the
+deployment/router implementation; the
+local helper only fixes the deterministic scheduling semantics that the router
+service must preserve.
+
+The reference router-service baseline is `AsyncRouterService`: it uses the
+binary frame codec and the pure scheduler to route `REQUEST` frames from client
+connections to registered backends, send assigned work as `FORWARD`, convert
+backend `RESPONSE` frames into client `DELIVER` frames, and requeue in-flight
+requests after backend disconnects. Backend `REGISTER` payloads are encoded as
+`RouterBackendRegistration` JSON inside the binary frame. This is a local
+correctness harness and future adapter target; it does not yet launch Lean
+backends, export/import state, fetch URI payloads, provide production
+connection hardening, or integrate with cluster autoscaling/metrics.
+
+The router adapter baseline is `RouterEnvBackend` plus `RouterBackendWorker`.
+`RouterEnvBackend` implements the normal LeanFoundry `EnvBackend` protocol for
+clients by encoding lean-client request/response models as JSON payloads inside
+router frames. `RouterBackendWorker` connects to the router as a backend,
+decodes those payloads, calls an injected concrete `EnvBackend`, and returns
+typed responses. The adapter covers limits, create_states, one-state
+step_batch via `EnvBackend.step(...)`, verify, cleanup, cancel, and stats. It
+does not alter the scheduler unit: one proof-state expansion is one router
+request. It also does not provide Lean state export/import or remote payload
+fetching; those remain separate backend/router integration work.
+
+The reference process entrypoints are `leanfoundry-router` and
+`leanfoundry-router-worker`. The first starts `AsyncRouterService` on a chosen
+host/port; the second connects one worker to the router and builds its Lean
+execution backend from `EnvBackendConfig`. These are stable commands for a
+site supervisor to run. They do not include service discovery, restart policy,
+TLS/auth, pager integration, or cluster autoscaler integration.
+
+The local hardening baseline adds `RouterServiceSnapshot` and
+`AsyncRouterService.snapshot()`: supervisors/tests can inspect connected
+backends, total/idle backend slots, in-flight requests, pending requests,
+active client requests, stored request frames, and assignment/delivery/requeue
+drop counters. If a client disconnects before its request is assigned, the
+router removes that pending request. If the request was already forwarded to a
+backend, the router sends a `CANCEL` frame to that backend, removes the request
+from scheduler state, and drains queued work into the freed backend slot.
+`RouterBackendWorker` cancels the local task for the router request; if a
+response races after cancellation, the router drops it because the request is no
+longer in-flight. Concrete Lean backend cancellation is still best-effort and
+depends on the injected backend's own cancellation behavior.
+
+The optional local health baseline is `leanfoundry.scaleout.health`.
+`router_health_report(...)` converts one `RouterServiceSnapshot` into a
+readiness report; `/healthz` is liveness-only, `/readyz` can require at least
+one registered backend slot, and `/metrics` renders the same snapshot fields in
+Prometheus text format. `leanfoundry-router --health-port PORT` starts this
+side server. It is intentionally a reference endpoint, not deployment-specific
+monitoring, alert routing, auth, TLS, or autoscaler glue.
+
 ## 14. State Portability (Stateless Backends)
 
 The key that makes multi-machine Lean execution work. Proof states travel
@@ -3256,6 +4169,23 @@ state_bytes = zstd.decompress(base64.decode(request.state_token))
 lean_repl.import_state(state_bytes)
 result = lean_repl.run_tactic(request.tactic)
 ```
+
+The local baseline is `PortableStateRef`: a manifest for a state snapshot's
+`state_id`, `env_profile`, codec (`raw` or `zstd`), payload location
+(`inline_base64` or `uri`), SHA-256, raw size, and payload size. It validates
+location-specific payload fields and exposes `compression_ratio`.
+`make_inline_state_ref(...)` and `decode_inline_state_ref(...)` now implement
+RAW inline payload round-tripping plus hash/size validation; ZSTD is supported
+when the `[scaleout]` optional extra installs `zstandard`, and otherwise fails
+closed with a runtime error.
+`make_file_state_ref(...)` and `decode_file_state_ref(...)` now provide local
+`file://` URI payload writes/reads with payload-size and decoded-state integrity
+checks. `decode_http_state_ref(...)` and `decode_uri_state_ref(...)` add
+read-only `http://` / `https://` payload fetches with the same payload-size,
+codec, and decoded-state hash checks. This covers public or signed object-store
+URLs that behave like HTTP(S) byte objects. Lean state export/import,
+credentialed object-store clients, remote writes, lifecycle policy, router
+payload transfer, and backend integration remain future/deployment work.
 
 ## 15. Distributed Replay Buffer
 
@@ -3316,10 +4246,12 @@ Suggested migration order:
 ---
 
 # Part IV: [EXTENSION B] Autoformalization Data Pipeline
-> **Status: Architecture outlined, implementation PENDING RESEARCH.
-> Do not build until the core system produces satisfactory results on
-> LeanDojo novel_premises split. Key design decisions require empirical
-> data from training runs.**
+> **Status: Promotion contract baseline, generation pipeline pending research.
+> Do not build LLM drafting/retry/judge/dedup services until the core system
+> produces satisfactory results on LeanDojo novel_premises split. LeanFoundry
+> now preserves staging headers and owns a deterministic promotion gate; the
+> upstream formalizer/judge/dedup implementations still require empirical data
+> from training runs.**
 
 ## 17. Why LeanDojo Alone Is Not Enough
 
@@ -3358,6 +4290,38 @@ Insert into formal_statements_staging with all provenance fields
 Promote to theorems table as B-type data
 ```
 
+The local baseline covers the deterministic contracts in this pipeline. A
+`FormalStatementStagingRecord` must carry the Lean `header` used during syntax
+checking. `run_formalization_draft_loop(...)` provides the local draft/retry
+orchestration: an injected `Formalizer` drafts one Lean statement, the injected
+statement verifier checks it, verifier messages are passed back as feedback
+for the next attempt, and an accepted result carries a syntax-checked staging
+row. `verify_staging_statement_code(...)` builds the checked Lean snippet by
+adding a `sorry` body when needed, `KiminaStatementVerifier` normalizes
+lean-client `api_check` responses into `StatementVerificationResult`, and
+`staging_record_with_syntax_result(...)` updates the row's `syntax_checked`
+field. `HTTPSemanticJudge` provides the local semantic-judge service contract:
+it sends staged informal/formal statement pairs to a JSON endpoint, validates a
+score in `[0, 1]`, and `staging_record_with_semantic_judge_result(...)`
+populates the row's `semantic_judge_score`. `evaluate_promotion(...)` requires
+syntax acceptance, a semantic judge score above the configured threshold, and a
+dedup hash by default. If the row passes, it returns a `TheoremRecord` with the
+same `lean_statement`, `informal_statement`, `env_profile`, and `header`;
+otherwise it returns machine-readable rejection reasons. The local helpers
+`formal_statement_dedup_hash(...)` and `staging_record_with_dedup_hash(...)`
+populate exact normalized statement/header/profile hashes for cheap duplicate
+filtering; this is not semantic or embedding-similarity dedup.
+`HTTPEmbeddingDeduplicator` provides the local embedding-dedup service
+contract: it sends the staged statement plus a similarity threshold to a JSON
+endpoint, accepts only threshold-consistent `unique` / `duplicate` responses,
+and returns a normalized `EmbeddingDedupResult`. When
+`PromotionGateConfig(require_embedding_unique=True)` is enabled, promotion
+rejects missing, errored, or duplicate embedding-dedup results. The baseline
+now includes an HTTP formalizer service/prompt contract, but still does not
+implement a deployed formalizer checkpoint, real judge model calibration, real
+embedding model/index, corpus calibration, service deployment, or live
+staged-corpus runs.
+
 ## 19. Difficulty Estimation
 
 Do not add all formalized statements with equal priority. Estimate
@@ -3373,6 +4337,11 @@ async def estimate_difficulty(theorem, model, env_backend, quick_budget=20):
     else:
         return "hard"      # queue for future iterations
 ```
+
+The local mapping helper is `estimate_difficulty_from_quick_search(...)`: given
+a quick-search `SearchResult`, it emits both a bucket (`easy`, `frontier`,
+`hard`) and the numeric `difficulty_estimate` stored on `TheoremRecord`.
+Producing the quick-search result still requires a real model/backend run.
 
 ## 20. Informal Source Priority and Scaling Roadmap
 
@@ -3423,8 +4392,12 @@ is high enough to yield meaningful throughput.
 ---
 
 # Extension C: Test-Time Training Module
-> **Status: Design sketch. Implement after core system is stable.
-> Requires a LoRA adapter interface in the training repo.**
+> **Status: Generic local loop and trace-replay contract. LeanFoundry owns
+> framework-neutral TTT protocols, trace schemas, the callback-driven
+> orchestration loop, the local trace-promotion decision gate, and the explicit
+> promoted-trace replay write. The downstream training repo still owns LoRA
+> optimizer execution and concrete SGLang reload; MCGS or another selected
+> per-problem search source remains future work.**
 
 ## 21. Motivation
 
@@ -3435,15 +4408,44 @@ useful for olympiad-level targets where no standard training signal exists.
 
 TTT is blocked on components beyond the current Path-A baseline:
 - search traces rich enough for per-problem fine-tuning
-- node-general HER or another extraction path that can train from a target
-  theorem's local traces
+- node-general proved-node extraction or another path that can train from a
+  target theorem's local traces
 - a PolicyClient/model-adapter contract for loading an updated LoRA without
   restarting the search loop
+
+The last item now has a local contract baseline:
+`leanfoundry.ttt.TTTAdapter` receives `TTTAdapterTrainingRequest` objects and
+returns `TTTAdapterTrainingResult` objects; `AdaptablePolicyClient` exposes the
+policy-side `with_adapter(adapter_id)` hook. `TTTConfig`, `TTTRoundTrace`, and
+`TTTSessionTrace` keep per-problem run metadata and make trace promotion to the
+main replay buffer opt-in.
 
 TTT orchestration belongs in LeanFoundry (infra repo) because it is
 model-agnostic — the same loop works for any PolicyClient implementation.
 The LoRA fine-tuning step is delegated to the training repo via an
 interface; the infra repo does not own an optimizer.
+The local implementation is `run_ttt_session(...)`: callers inject one
+search-round function and one sample extractor, so the loop can run with current
+tree search traces today while still allowing a future MCGS search source. The
+orchestrator builds `TTTAdapterTrainingRequest`s, validates adapter results,
+reloads the returned adapter id, binds the policy view through
+`with_adapter(...)`, and records a `TTTSessionTrace`. It deliberately does not
+write TTT traces to the main replay buffer automatically.
+
+The local promotion gate is `evaluate_ttt_trace_promotion(...)`. It is opt-in:
+`TTTConfig.promote_traces_to_main_replay` must be true unless a caller supplies
+a looser policy. The default gate also checks the trace namespace/base
+checkpoint against config, optionally checks the expected env profile, rejects
+duplicate trace keys supplied by the caller, rejects failed stages, and promotes
+only solved sessions with at least one successful adapter reload. A passing
+decision returns a copy of the trace with `promoted_to_main_replay=True`.
+Persisting the promoted trace is an explicit caller-owned write path:
+`ttt_trace_replay_record_from_decision(...)` builds a deterministic
+`TTTTraceReplayRecord`, and `persist_promoted_ttt_trace(...)` writes it through
+`ReplayStore.put_ttt_trace_replay_records(...)` into SQLite
+`ttt_trace_replay`. This stores the trace and promotion decision as replay
+artifacts only; derived policy/value/A-type samples still require a separate
+dataset policy.
 
 ## 22. TTT Interface
 
@@ -3451,17 +4453,19 @@ interface; the infra repo does not own an optimizer.
 class TTTAdapter(Protocol):
     async def fine_tune(
         self,
-        samples: list[TrainingSample],
-        base_checkpoint: str,
-        lora_rank: int,
-        steps: int,
-    ) -> str:
-        """Fine-tune a LoRA adapter on samples.
-        Returns path/ID of updated adapter."""
+        request: TTTAdapterTrainingRequest,
+    ) -> TTTAdapterTrainingResult:
+        """Fine-tune a per-problem adapter and return its reload id."""
         ...
 
     async def reload(self, adapter_id: str) -> None:
-        """Hot-swap SGLang to serve base model + adapter."""
+        """Make an adapter id active for subsequent policy calls."""
+        ...
+
+
+class AdaptablePolicyClient(PolicyClient, Protocol):
+    def with_adapter(self, adapter_id: str) -> PolicyClient:
+        """Return a policy view that serves through adapter_id."""
         ...
 ```
 
@@ -3479,10 +4483,12 @@ async def test_time_train(
     config: TTTConfig,
 ) -> ProofResult | None:
 
+    session_id = new_ttt_session_id(theorem)
+    current_adapter_id = None
     for round in range(config.max_rounds):
         # 1. Search with current policy
         result = await mcgs_search(theorem, policy, env_backend,
-                                   budget=config.search_budget)
+                                   budget=config.search_budget_tactic_calls)
         if result.proved:
             return result
 
@@ -3492,16 +4498,24 @@ async def test_time_train(
             break
 
         # 3. Fine-tune LoRA adapter on traces
-        adapter_id = await adapter.fine_tune(
-            samples,
+        request = TTTAdapterTrainingRequest(
+            session_id=session_id,
+            theorem_id=theorem.id,
+            env_profile=theorem.env_profile,
+            round_index=round,
             base_checkpoint=config.base_checkpoint,
+            parent_adapter_id=current_adapter_id,
             lora_rank=config.lora_rank,
             steps=config.fine_tune_steps,
+            adapter_namespace=config.adapter_namespace,
+            samples=samples,
         )
+        train_result = await adapter.fine_tune(request)
+        current_adapter_id = train_result.adapter_id
 
         # 4. Reload policy with updated adapter
-        await adapter.reload(adapter_id)
-        policy = policy.with_adapter(adapter_id)
+        await adapter.reload(current_adapter_id)
+        policy = policy.with_adapter(current_adapter_id)
 
     return None
 ```
@@ -3514,19 +4528,23 @@ during evaluation on hard targets (olympiad problems, PutnamBench) after
 the standard training pipeline is complete.
 
 TTT results are not folded back into the main A-type training set without
-careful deduplication and env_profile verification. Search traces from TTT
-sessions may be used to expand B-type data for future training iterations,
-but this requires the same provenance tracking as any external data.
+careful deduplication and env_profile verification. Promoted TTT session
+traces may be stored in `ttt_trace_replay` after the local promotion gate, but
+that table is a trace-artifact ledger, not proof data. Any later conversion of
+TTT traces into training rows requires the same provenance policy as any
+external data.
 
 ---
 
 # Part V: [EXTENSION D] Controlled Algorithm Ablation Study
-> **Status: Design sketch. Run after Stage 1 checkpoint and a hygiene-
-> passed curated pool exist. This Part is additive — it does not change
-> Stages 2-4, their dynamic frontier filtering, or their adaptive exit
-> criteria. Those remain the production "how far can we go" recipe.
-> Extension D answers a different, narrower question under its own
-> frozen conditions, run alongside the core pipeline rather than
+> **Status: Contract baseline. Run after Stage 1 checkpoint and a hygiene-
+> passed curated pool exist. LeanFoundry now owns the ablation plan schema
+> (`AblationExperimentPlan`) and default arm/ledger/eval-matrix helpers; the
+> training repo still owns optimizer execution and checkpoint production. This
+> Part is additive — it does not change Stages 2-4, their dynamic frontier
+> filtering, or their adaptive exit criteria. Those remain the production "how
+> far can we go" recipe. Extension D answers a different, narrower question
+> under its own frozen conditions, run alongside the core pipeline rather than
 > replacing any part of it.**
 
 ## 25. Motivation and Relationship to the Core Pipeline
@@ -3541,41 +4559,28 @@ still long enough to isolate why a given combination works.
 
 Extension D asks a different question: holding the base checkpoint, the
 theorem-to-round assignment, and total compute fixed, which training
-algorithm produces a better prover, and through which mechanism? This
-requires arms that do NOT adapt their own curriculum or escalate
-their own queues — the opposite of what makes Stages 2-4 effective in
-production. Hence a separate Part, a separate frozen curriculum, and
-its own smaller-scale arms, rather than instrumentation bolted onto the
-core pipeline.
-
-Three camps, not two, motivate the arm design below:
+target produces the best prover? The axis is **training data shape**, not
+rendered proof discovery:
 
 ```
-Camp 1 — outcome-only:
-  whole-proof EI / RL. Training target is "did the whole proof verify."
-  No search at any stage, including data collection.
+Lineage B — whole-proof target:
+  theorem statement -> complete Lean proof. The model's own proof is verified
+  once by /exec/verify. No tree rendering is involved.
 
-Camp 2 — search-as-discovery-only:
-  search (best-first or MCGS) finds proofs that direct sampling cannot,
-  but the training target stays flat — same as Camp 1, just on a better
-  set of discovered proofs. No value loss, no HER-derived auxiliary
-  samples feed the gradient. This is closest to BFS-Prover and to
-  DeepSeek-Prover-V1.5's RMaxTS-for-data-collection role.
+Lineage A — step-policy target:
+  Lean proof state -> next tactic. Tree search supplies the proof states and
+  proved tactic edges. The search algorithm's selection/value/backup decisions
+  are distilled into a step policy. No whole proof is rendered from the tree.
 
-Camp 3 — search-with-shaped-credit:
-  MCGS/tree search + value function + HER-style auxiliary data, where
-  the search structure itself produces additional training signal beyond
-  "proof found" — value labels on searched states and, once implemented,
-  HER subproofs from unsolved roots. This is a future full arm; the current
-  production baseline has Path-A policy/value extraction but not graph/MCGS
-  or node-general HER.
+Mixed target:
+  train one checkpoint on both whole-proof and step-policy rows, optionally with
+  self-correction, reflection, and state-comment enhancements.
 ```
 
-Camp 1 vs. Camp 2 isolates whether better proof *discovery* explains an
-improvement. Camp 2 vs. Camp 3 isolates whether shaped credit assignment
-adds anything beyond discovery quality. Conflating these (comparing Camp 1
-directly to Camp 3, as most published comparisons do) cannot tell you
-which mechanism is responsible for any observed gap.
+This requires arms that do not adapt their own curriculum or escalate their own
+queues — the opposite of what makes Stages 2-4 effective in production. Hence a
+separate Part, a separate frozen curriculum, and its own smaller-scale arms,
+rather than instrumentation bolted onto the core pipeline.
 
 ## 26. Frozen Curriculum
 
@@ -3603,37 +4608,51 @@ for a controlled comparison. Extension D removes it by construction, at
 the cost of not adapting — which is exactly the cost that makes it
 unsuitable as a replacement for Stages 2-4.
 
+LeanFoundry owns the deterministic construction helper, not the model sweep:
+`build_frozen_curriculum_from_pass_sweep(...)` takes aligned theorem /
+`SearchResult` pairs from a direct whole-proof run, verifies that each theorem
+has direct verification attempts for candidate indices `1..N`, computes the
+observed accepted-candidate rate, assigns default buckets
+`unsolved/hard/medium/easy`, and rank-splits the fixed pool into rounds. Weak
+or partial sweep evidence fails closed instead of silently entering the
+curriculum. Producing those results on a real checkpoint and executing the
+resulting training arms remains the downstream training/deployment job.
+
 ## 27. Algorithm Arms
 
 ```
-Arm W       — whole-proof EI only (§7 Stage 2 mechanics, no Stage 3
-              escalation, frozen curriculum). Camp 1.
+Arm W       — whole-proof EI / RL only (§7 Stage 2 mechanics, no tree data,
+              frozen curriculum). Training rows are lineage B:
+              prompt=statement, response=verified whole proof.
 
 Arm W+SC    — Arm W, plus self-correction (Format 3: failed proof +
-              Lean errors → revision). Still a flat outcome-only
-              target. Camp 1, with one round of real compiler feedback.
+              Lean errors → revision), and optional tactic-state comments in
+              whole-proof data. Still no tree-generated step rows.
 
-Arm S-disc  — Search (§3.2-3.3) finds proofs per the frozen
-              curriculum; train ONLY on found whole-proof and
-              tactic-sequence pairs. No value loss term. No HER
-              extraction. Isolates discovery quality from shaped
-              credit assignment. Camp 2.
+Arm T-step  — Tree-search EI. Run the implemented AND/OR tree search on the
+              frozen curriculum and train only lineage-A step rows:
+              prompt=proof_state, response=proved tactic. Include value labels
+              if `value_mode` owns them. Rendering from tree is not used.
 
-Arm S-noval — Best-first search, no value model, ranking by policy
-              probability only (BFS-Prover-style). Isolates whether a
-              learned value function specifically matters within
-              search, independent of HER. Camp 2 variant.
+Arm T-noval — Same lineage-A target as T-step, but with no value client / no
+              value loss and a policy-prior or structural selector. This tests
+              whether value-guided search improves the quality of step data,
+              not whether search can render more whole proofs.
 
-Arm S-full  — Full shaped-credit mechanics (§3.2-3.5): graph/MCGS or
-              tree search, value function, and HER-style auxiliary data
-              under the frozen curriculum instead of the dynamic pass_rate=0
-              queue. Camp 3.
+Arm Mix     — Multi-format training on lineage-B whole proofs + lineage-A
+              tree step rows, optionally with self-correction/comment
+              enhancements. This is the production-relevant question: can mixed
+              data match or beat either pure target?
 ```
 
 Arms are seeded from the identical Stage 1 checkpoint. None of them
 feed into or modify the production Stage 2-4 pipeline's own state;
 each Extension D arm keeps its own replay buffer and checkpoint
-lineage.
+lineage. In the local contract this is represented by
+`ExperimentArmSpec.replay_namespace` and
+`ExperimentArmSpec.checkpoint_namespace`. Tree-value arms can declare bonded or
+unbonded value serving with either numeric-head or natural-language boxed-score
+outputs; `T-noval` is explicitly forbidden from declaring value serving.
 
 ## 28. Compute Ledger and Budget Enforcement
 
@@ -3651,13 +4670,27 @@ service decrements the per-cell budget and refuses requests once
 exhausted. This is enforcement, not just measurement — without hard
 caps, the search arms can silently overspend relative to Arm W and the
 comparison stops being interpretable.
+`BudgetLedgerEntry` records the required generation, training, and verifier caps
+per arm and frozen round. The schema verifies that every arm/round/meter cell is
+present and that ledger entries use the arm's own `budget_account_id`.
+The local guard `check_budget_request(...)` applies one ledger cell to one
+observed usage snapshot: it verifies the request account id, computes remaining
+budget before and after the proposed request, and refuses hard-cap overruns.
+`SQLiteBudgetMeterStore` is the local durable meter: it creates/verifies ledger
+cells in SQLite, stores `used` per arm/round/meter, and reserves usage inside a
+`BEGIN IMMEDIATE` transaction before updating the counter. This is enough for
+local runs and single-file coordination. `leanfoundry-budget-meter` exposes the
+same store to scripts: `init` loads a JSON list of `BudgetLedgerEntry` objects
+or an object with `budget_ledger`, `reserve` atomically spends one request and
+returns nonzero on refusal, and `snapshot` prints durable usage for one cell.
+Multi-node metering services, trainer-side wiring, worker-side measurement
+collection, and production DB deployment remain deployment/training work.
 
 For cross-architecture pass@K reporting, adopt DeepSeek-Prover-V1.5's
 budget-alignment convention as the primary axis: K = total proofs
-generated for single-pass arms (W, W+SC), K = N×S×T for best-first
-search (attempts × tactics per expansion × expansion iterations,
-S-noval), K = N×T for tree search (attempts × model generations
-invoked, S-disc and S-full). Report the three-ledger breakdown
+generated for whole-proof arms (W, W+SC), K = attempts × tactics per expansion
+× expansion iterations for tree-step arms (T-step, T-noval), and both ledgers
+for Mix. Report the three-ledger breakdown
 secondarily — invocation counts alone hide the cost of macro-tactics
 (`aesop`, `nlinarith`, `simp_all`), which can each absorb a single
 "node" worth of K while consuming a highly variable amount of actual
@@ -3668,31 +4701,26 @@ this reason.
 
 Evaluating each arm only in its native inference mode confounds
 "did this training algorithm produce a better core policy" with "does
-this inference protocol help regardless of how the policy was trained."
-Because a whole-proof attempt is just a sequence of tactics, any
-whole-proof-trained arm can be wrapped in post-hoc external search at
-inference by truncating at tactic boundaries and resuming search from
-the resulting state — this is exactly DeepSeek-Prover-V1.5's
-truncate-and-resume mechanism for RMaxTS, applied here as an evaluation
-tool rather than a training-time method. Symmetrically, a search-trained
-arm can be run single-shot by sampling from its policy head and ignoring
-the value head and tree apparatus entirely.
+this inference protocol help regardless of how the policy was trained." The
+valid eval modes depend on the training target's prompt distribution:
 
 ```
-                    eval: native            eval: cross-wrapped
-Arm W           |   single-shot pass@K   |  + post-hoc search wrapper
-Arm W+SC        |   self-correct pass@K  |  + post-hoc search wrapper
-Arm S-disc      |   MCGS solved@budget   |  single-shot from policy head
-Arm S-noval     |   BFS solved@budget    |  single-shot from policy head
-Arm S-full      |   MCGS solved@budget   |  single-shot from policy head
+                    native eval                         secondary eval
+Arm W           |   whole-proof pass@K                  optional hybrid wrapper
+Arm W+SC        |   self-correct / whole-proof pass@K   optional hybrid wrapper
+Arm T-step      |   interactive/tree solved@budget      no direct pass@K unless
+                                                        whole-proof format trained
+Arm T-noval     |   interactive/tree solved@budget      same as T-step
+Arm Mix         |   both pass@K and solved@budget       compare both heads/modes
 ```
 
 Diagonal cells are the deployment-relevant numbers: this training
 recipe, deployed in its own native mode, at matched budget. Off-diagonal
-cells isolate mechanism. DeepSeek-Prover-V1.5's own published RMaxTS
-result (whole-proof-RL policy + search wrapper: 60.2% → 63.5% on
-miniF2F) is a useful external sanity-check reference for the Arm
-W / cross-wrapped cell before trusting this study's own numbers.
+cells are diagnostics only and must not be treated as the main comparison if the
+prompt format was never trained. DeepSeek-Prover-V1.5's published RMaxTS result
+(whole-proof-RL policy + search wrapper: 60.2% -> 63.5% on miniF2F) is a useful
+external sanity-check reference for the Arm W optional hybrid cell before
+trusting this study's own numbers.
 
 All results are stratified by required-proof-length / difficulty bucket
 (from the frozen §26 assignment). The predicted result is a
@@ -3700,13 +4728,10 @@ difficulty-dependent crossover, not a uniform ranking: outcome-only
 arms (W, W+SC) are expected to match or beat the search arms on short
 proofs, where direct sampling already succeeds often enough to get
 nonzero reward, and to lag increasingly on long, compositional proofs,
-where outcome-only reward is exactly zero until the model can already
-nearly solve the whole thing — while Arm S-full's value labels and HER
-subproofs give nonzero training signal on theorems it never fully
-solves. Arm S-disc sitting between Arm W and Arm S-full on long proofs
-would indicate the gap is mostly about discovery quality; Arm S-disc
-tracking Arm W instead would indicate the gap is mostly about shaped
-credit assignment.
+where whole-proof reward is exactly zero until the model can nearly solve the
+whole thing. T-step can still emit local step positives when search proves
+subgoals, and Mix tests whether those local rows complement whole-proof
+training instead of replacing it.
 
 ## 30. Hygiene Defaults for the Curated Pool
 
@@ -3725,23 +4750,25 @@ should not be allowed to vary uncontrolled across arms by accident.
 ## 31. Outcome Variables
 
 ```
-held-out solved@budget per ledger unit, stratified by difficulty bucket
-compute-to-asymptote (shift) vs. final asymptote, per arm
+whole-proof pass@K per generation/training/verifier budget (W, W+SC, Mix)
+interactive/tree solved@budget per ledger unit (T-step, T-noval, Mix)
+compute-to-asymptote (shift) vs. final asymptote, per arm/mode
 macro-tactic call rate per arm (covariate for K-alignment, not an outcome)
-value AUC / calibration error (S-disc, S-noval, S-full only)
-HER rescue rate: fraction of unsolved-root search sessions yielding
-  at least one verified subproof (S-disc and S-full, for comparison)
+step valid-rate and proof-progress rate for lineage-A policies
+value AUC / calibration error (T-step and Mix only when value labels are trained)
+step-HER multiplier: proved step rows per root witness step row
+optional rendered-HER candidate/verified multiplier (artifact path only)
 ```
 
 ## 32. Scope
 
-Run the full 5-arm × difficulty-stratified matrix at a smaller model
+Run the full 5-arm x difficulty-stratified matrix at a smaller model
 size than the production §5.2 base model, given compute constraints;
-confirm the headline crossover (Arm W vs. Arm S-full, on the longest
+confirm the headline crossover (Arm W vs. T-step/Mix, on the longest
 difficulty bucket) at full scale only for the cell(s) that matter most
 once the smaller-scale results are in. Two to three seeds on headline
-cells; single-seed acceptable for the remaining diagnostic arms (S-disc,
-S-noval) given their role is mechanism isolation, not the topline claim.
+cells; single-seed acceptable for diagnostic arms (W+SC, T-noval) when they are
+used to explain the topline rather than establish it.
 
 This Part does not modify Stage 1's checkpoint, Stage 2-4's mechanics,
 or the production pipeline's own replay buffer and exit criteria in
@@ -3808,6 +4835,26 @@ and the same hygiene-passed pool, and writes to its own buffers.
       checks, branch parallelism, proof-tree data, and white-box Lean
       proof-state tooling.
 
+[8a] cat-searcher/minif2f-lean4. MiniF2F Lean 4 JSONL dataset.
+     https://huggingface.co/datasets/cat-searcher/minif2f-lean4
+     → Public MiniF2F Lean 4 row shape used by the built-in
+       `minif2f_lean4_jsonl` benchmark adapter.
+
+[8b] ChristianZ97/PutnamBench-lean4. PutnamBench Lean 4 JSONL dataset.
+     https://huggingface.co/datasets/ChristianZ97/PutnamBench-lean4
+     → Public PutnamBench Lean 4 row shape used by the built-in
+       `putnambench_lean4_jsonl` benchmark adapter.
+
+[8c] Goedel-LM/MathOlympiadBench. MathOlympiadBench Lean 4 JSONL dataset.
+     https://huggingface.co/datasets/Goedel-LM/MathOlympiadBench
+     → Public MathOlympiadBench row shape used by the built-in
+       `matholympiadbench_lean4_jsonl` benchmark adapter.
+
+[8d] UDACA/proofnet-lean4. ProofNet Lean 4 JSONL dataset.
+     https://huggingface.co/datasets/UDACA/proofnet-lean4
+     → Public ProofNet Lean 4 row shape used by the built-in
+       `proofnet_lean4_jsonl` benchmark adapter.
+
 [9] Lean Copilot. "Towards Large Language Models as Copilots for Theorem
     Proving in Lean." arXiv:2404.12534, 2024/2025.
     → Lean-native LLM inference framework for tactic suggestion, proof search,
@@ -3830,6 +4877,11 @@ and the same hygiene-passed pool, and writes to its own buffers.
      reinforcement learning." Nature, 2025.
      → AlphaProof/AlphaGeometry formal reasoning system; 2024 IMO silver-level
        result and AlphaZero-style RL over Lean proof search.
+
+[12a] Lample et al. "HyperTree Proof Search for Neural Theorem Proving."
+      arXiv:2205.11491, 2022.
+      → Direct prior for policy/value-guided proof search, search-generated
+        training traces, and step-level proof-state/action learning.
 
 [13] ByteDance Seed. "BFS-Prover: Scalable Best-First Tree Search for
      LLM-based Automatic Theorem Proving." arXiv:2502.03438, 2025.
@@ -3905,6 +4957,16 @@ and the same hygiene-passed pool, and writes to its own buffers.
 
 [28] Shao et al. "DeepSeekMath." arXiv:2402.03300, 2024.
      → Source for GRPO used in Stage 4.
+
+[29] Ma et al. "OProver: A Unified Framework for Agentic Formal Theorem
+     Proving." arXiv:2605.17283, 2026.
+     → Recent whole-proof/agentic Lean 4 baseline using retrieved verified
+       proofs, repair trajectories, SFT, and RL over unresolved hard cases.
+
+[30] Leang et al. "Pythagoras-Prover: Advancing Efficient Formal Proving via
+     Augmented Lean Formalisation." arXiv:2606.12594, 2026.
+     → Recent compute-efficient open Lean prover family with autoregressive
+       and diffusion-style proof generation plus augmented formalization data.
 
 ---
 
@@ -4096,10 +5158,13 @@ The action string includes hidden CoT tokens, inline comments, and formal
 tactic text. Inline comments must be preserved — they are persistent memory
 across the proof and the model must learn to produce them (see G4).
 
-Hindsight Experience Replay multiplies examples by treating proved subtrees
-as standalone root theorems. Amplification of 10–50× is claimed by Aristotle;
-actual `her_verified_multiplier` depends on how many candidates survive
-Kimina re-verification (see R2).
+Hindsight Experience Replay has two surfaces in LeanFoundry. The primary
+lineage-A surface multiplies examples by treating proved nodes as additional
+local `(state, action)` examples; this does not require rendering. The optional
+lineage-B artifact surface tries to render proved subtrees as standalone root
+theorems and then re-verify them; Aristotle reports 10–50x amplification for
+that style of subtree reuse, but LeanFoundry's default training path should not
+depend on render verification.
 
 ---
 

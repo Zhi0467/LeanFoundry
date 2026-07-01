@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from leanfoundry.schemas._base import LeanFoundryModel
@@ -84,6 +86,10 @@ class FormalStatementStagingRecord(LeanFoundryModel):
     )
     lean_statement: str = Field(description="Generated Lean statement.")
     env_profile: str = Field(description="Environment used for syntax checks.")
+    header: str = Field(
+        default="",
+        description="Lean import/options prefix used to check the statement.",
+    )
     formalizer_version: str | None = Field(
         default=None,
         description="Formalizer model or prompt version.",
@@ -105,4 +111,119 @@ class FormalStatementStagingRecord(LeanFoundryModel):
     promoted_to_theorems: bool = Field(
         default=False,
         description="Whether this record has entered the theorem table.",
+    )
+
+
+class AttemptLifecycleRecord(LeanFoundryModel):
+    """Durable backend lifecycle item for cleanup/cancel reconciliation."""
+
+    id: str = Field(description="Stable lifecycle record id.")
+    theorem_id: str = Field(description="Theorem tied to this attempt.")
+    env_profile: str = Field(description="Pinned Lean/Mathlib environment.")
+    attempt_id: str = Field(description="Search attempt id.")
+    backend_item_id: str = Field(description="Backend /exec item id.")
+    lifecycle_stage: Literal["cleanup", "cancel"] = Field(
+        description="Backend lifecycle operation that produced this record.",
+    )
+    lifecycle_status: str = Field(
+        description="Last observed item status, for example deferred/failed.",
+    )
+    retry_count: int = Field(
+        default=0,
+        ge=0,
+        description="Cleanup/cancel attempts already made for this item.",
+    )
+    max_retries: int | None = Field(
+        default=None,
+        ge=0,
+        description="Bounded retry count used by the original attempt.",
+    )
+    last_error: str | None = Field(
+        default=None,
+        description="Transport or backend error from the last operation.",
+    )
+    next_retry_at: str | None = Field(
+        default=None,
+        description="Scheduler timestamp for future reconciliation.",
+    )
+    terminal: bool = Field(
+        default=False,
+        description="Whether this lifecycle item needs no further action.",
+    )
+    created_at: str | None = Field(
+        default=None,
+        description="Storage timestamp, if assigned by the store.",
+    )
+    updated_at: str | None = Field(
+        default=None,
+        description="Last storage update timestamp, if assigned by the store.",
+    )
+
+
+class ExtractionFailureRecord(LeanFoundryModel):
+    """Durable extraction/rendering failure tied to a search attempt."""
+
+    id: str = Field(description="Stable extraction-failure record id.")
+    theorem_id: str = Field(description="Theorem tied to this failure.")
+    env_profile: str = Field(description="Pinned Lean/Mathlib environment.")
+    attempt_id: str | None = Field(
+        default=None,
+        description="Search attempt id, if the runner allocated one.",
+    )
+    failure_kind: Literal["rendering", "verification", "unsupported"] = Field(
+        description="Failure class from TrainingArtifacts.failures.",
+    )
+    message: str = Field(description="Human-readable failure detail.")
+    node_id: str | None = Field(
+        default=None,
+        description="Runtime node id if the failure localizes to one node.",
+    )
+    model_version: int | None = Field(
+        default=None,
+        description="Model iteration that produced the failed artifact.",
+    )
+    created_at: str | None = Field(
+        default=None,
+        description="Storage timestamp, if assigned by the store.",
+    )
+
+
+class NegationAttemptRecord(LeanFoundryModel):
+    """Durable synthetic-negation proof attempt."""
+
+    id: str = Field(description="Stable negation-attempt record id.")
+    theorem_id: str = Field(description="Theorem tied to this attempt.")
+    env_profile: str = Field(description="Pinned Lean/Mathlib environment.")
+    attempt_id: str | None = Field(
+        default=None,
+        description="Search attempt id, if the runner allocated one.",
+    )
+    source_node_id: str = Field(
+        description="Runtime state node whose negation was checked."
+    )
+    negated_target: str = Field(description="Lean target wrapped in negation.")
+    status: str = Field(description="Negation attempt outcome.")
+    proved: bool = Field(description="Whether the negation closed.")
+    proved_tactic: str | None = Field(
+        default=None,
+        description="Tactic that proved the negation, if any.",
+    )
+    tactic_calls_used: int = Field(
+        ge=0,
+        description="Lean tactic attempts charged for this negation check.",
+    )
+    rendered_lean: str | None = Field(
+        default=None,
+        description="Synthetic negated theorem submitted to Lean.",
+    )
+    payload_json: str = Field(
+        description="Full serialized NegationAttempt artifact.",
+    )
+    model_version: int | None = Field(
+        default=None,
+        description="Model iteration that produced this attempt.",
+    )
+    created_at: str | None = Field(
+        default=None,
+        description="Storage timestamp, if assigned by the store.",
     )

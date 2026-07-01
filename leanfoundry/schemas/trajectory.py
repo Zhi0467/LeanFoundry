@@ -87,6 +87,120 @@ class TrainingSample(LeanFoundryModel):
     )
 
 
+class SelfCorrectTurn(LeanFoundryModel):
+    """One whole-proof attempt in a self-correction trace."""
+
+    turn_index: int = Field(
+        ge=1,
+        description="One-based proof attempt index inside this trace.",
+    )
+    proof: str = Field(description="Model-produced Lean proof text.")
+    verifier_status: str = Field(description="Verifier status for this proof.")
+    verifier_feedback: str = Field(
+        default="",
+        description="Rendered verifier feedback shown to the next turn.",
+    )
+    verify_item_id: str = Field(description="Backend verifier item id.")
+    accepted: bool = Field(
+        default=False,
+        description="Whether this turn passed final verification.",
+    )
+
+
+class SelfCorrectTrace(LeanFoundryModel):
+    """Failed-proof / feedback / correction artifact for self-correct data."""
+
+    turns: list[SelfCorrectTurn] = Field(
+        default_factory=list,
+        description="Ordered proof attempts and verifier feedback.",
+    )
+
+
+class DirectVerificationAttempt(LeanFoundryModel):
+    """One direct whole-proof candidate verification attempt."""
+
+    candidate_index: int = Field(
+        ge=1,
+        description="One-based direct candidate index in this search attempt.",
+    )
+    proof: str = Field(description="Model-produced Lean proof text.")
+    verifier_status: str = Field(
+        description="Verifier status returned for this candidate."
+    )
+    verifier_feedback: str = Field(
+        default="",
+        description="Rendered verifier feedback for this candidate.",
+    )
+    verify_item_id: str = Field(description="Backend verifier item id.")
+    accepted: bool = Field(
+        default=False,
+        description="Whether this candidate passed final verification.",
+    )
+
+
+class NegationTacticAttempt(LeanFoundryModel):
+    """One tactic tried while proving a synthetic negated theorem."""
+
+    tactic: str = Field(description="Tactic attempted on the negation goal.")
+    status: str = Field(description="Backend step status for this tactic.")
+    messages: list[str] = Field(
+        default_factory=list,
+        description="Rendered backend messages for this tactic.",
+    )
+
+
+class NegationAttempt(LeanFoundryModel):
+    """Synthetic negation proof attempt used to disprove a state."""
+
+    source_node_id: str = Field(
+        description="Runtime state node whose negation was checked."
+    )
+    source_state: FactorizedProofState = Field(
+        description="Original state checked for semantic disproof."
+    )
+    negated_target: str = Field(description="Lean target wrapped in negation.")
+    rendered_lean: str | None = Field(
+        default=None,
+        description="Synthetic negated theorem submitted to the backend.",
+    )
+    theorem_name: str | None = Field(
+        default=None,
+        description="Synthetic negated theorem name, when rendered.",
+    )
+    negation_state: FactorizedProofState | None = Field(
+        default=None,
+        description="Backend state for the synthetic negation theorem.",
+    )
+    step_item_id: str | None = Field(
+        default=None,
+        description="Backend step item id used for negation tactics.",
+    )
+    status: str = Field(
+        description="Attempt outcome, e.g. proved/not_proved/unsupported."
+    )
+    tactic_attempts: list[NegationTacticAttempt] = Field(
+        default_factory=list,
+        description="Tactics tried on the synthetic negation goal.",
+    )
+    tactic_calls_used: int = Field(
+        default=0,
+        ge=0,
+        description="Lean tactic attempts charged for this negation check.",
+    )
+    proved: bool = Field(
+        default=False,
+        description="Whether the synthetic negation closed.",
+    )
+    proved_tactic: str | None = Field(
+        default=None,
+        description="Tactic that proved the negation, if any.",
+    )
+    operational_status: str | None = Field(
+        default=None,
+        description="Operational backend status if the check aborted search.",
+    )
+
+
 class PolicyExample(LeanFoundryModel):
     """Positive tactic-policy example extracted from search data."""
 
@@ -96,8 +210,8 @@ class PolicyExample(LeanFoundryModel):
     proof_prefix: str = Field(
         default="",
         description=(
-            "Root-to-state tactic prefix for history-conditional training. "
-            "Empty for a real initial state."
+            "Root-to-state tactic prefix kept as provenance or optional "
+            "prompt context. Empty for a real initial state."
         ),
     )
     tactic: str = Field(description="Proved tactic text.")
@@ -137,6 +251,24 @@ class TrainingArtifacts(LeanFoundryModel):
     proof_candidates: list[ProofTree] = Field(
         default_factory=list,
         description="Rendered proof candidates and verifier status.",
+    )
+    direct_verification_attempts: list[DirectVerificationAttempt] = Field(
+        default_factory=list,
+        description=(
+            "All verifier attempts for direct/self-correct whole-proof "
+            "candidates. Kept for eval provenance, not as a training row."
+        ),
+    )
+    negation_attempts: list[NegationAttempt] = Field(
+        default_factory=list,
+        description=(
+            "Synthetic negation proof attempts used for DISPROVED labels. "
+            "Kept for diagnostics/audit, not as policy positives."
+        ),
+    )
+    self_correct_traces: list[SelfCorrectTrace] = Field(
+        default_factory=list,
+        description="Whole-proof self-correction traces, if any.",
     )
     policy_examples: list[PolicyExample] = Field(
         default_factory=list,

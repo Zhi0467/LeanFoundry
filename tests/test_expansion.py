@@ -30,6 +30,7 @@ class FakePolicyClient:
     def __init__(self, tactics: list[str]) -> None:
         self.tactics = tactics
         self.calls: list[tuple[list[FactorizedProofState], int]] = []
+        self.contexts = []
 
     async def sample_tactics(
         self,
@@ -37,8 +38,10 @@ class FakePolicyClient:
         *,
         n: int,
         params=None,
+        context=None,
     ) -> list[list[str]]:
         self.calls.append((list(states), n))
+        self.contexts.append(context)
         return [self.tactics[:n]]
 
     async def sample_proofs(self, prompts, *, n: int, params=None):
@@ -321,17 +324,19 @@ def test_expand_state_splits_goals_and_focuses_child_step() -> None:
             results=[ExecStepResult(tactic="trivial", status="complete")],
         )
     )
+    leaf_policy = FakePolicyClient(["trivial"])
     asyncio.run(
         expand_state(
             tree,
             independent_child,
-            policy_client=FakePolicyClient(["trivial"]),
+            policy_client=leaf_policy,
             env_backend=leaf_backend,
             config=SearchConfig(max_tactic_calls=10, tactics_per_expansion=1),
         )
     )
 
     assert leaf_backend.step_calls[0][3] == (1,)
+    assert leaf_policy.contexts[0][0].proof_prefix == "constructor"
     assert independent_child.status is StateNodeStatus.PROVED
 
 

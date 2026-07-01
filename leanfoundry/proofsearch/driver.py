@@ -83,12 +83,35 @@ async def run_search_batch(
                     result,
                     model_version=model_version,
                 )
-            except asyncio.CancelledError:
-                await cancel_search_state_best_effort(
+            except asyncio.CancelledError as error:
+                cancel_report = await cancel_search_state_best_effort(
                     env_backend,
                     attempt_context,
                 )
-                await cleanup_search_state(env_backend, attempt_context)
+                cleanup_report = await cleanup_search_state(
+                    env_backend,
+                    attempt_context,
+                )
+                if replay_store is not None:
+                    diagnostics = dict(
+                        getattr(error, "diagnostics", {}) or {}
+                    )
+                    if cancel_report.attempted_item_ids:
+                        diagnostics.update(cancel_report.diagnostics())
+                    diagnostics.update(cleanup_report.diagnostics())
+                    await _persist_result_best_effort(
+                        replay_store,
+                        theorem,
+                        result_with_attempt_context(
+                            SearchResult(
+                                theorem_id=theorem.id,
+                                status=SearchStatus.CANCELLED,
+                                diagnostics=diagnostics,
+                            ),
+                            attempt_context,
+                        ),
+                        model_version=model_version,
+                    )
                 raise
             except Exception as error:
                 result = _runner_error_result(
